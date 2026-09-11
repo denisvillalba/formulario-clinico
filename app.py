@@ -1,0 +1,4041 @@
+from pathlib import Path
+
+from textwrap import dedent
+
+import base64
+import calendar
+import json
+import math
+import re
+import time
+
+import altair as alt
+import requests
+import pandas as pd
+import streamlit as st
+from googleapiclient.errors import HttpError
+
+from datetime import date, datetime, timedelta
+from io import BytesIO
+from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
+
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
+from PIL import Image
+
+
+# =========================================================
+# CONFIGURACIÓN GENERAL
+# =========================================================
+
+# Render fue retirado: el registro de formularios (antes en SQLite/
+# FastAPI) ahora lo maneja el propio Apps Script (guarda cada
+# registro del día en una Google Sheet). Ver listar_formularios_apps_script().
+
+CARPETA_FRONTEND = Path(__file__).resolve().parent
+CARPETA_PROYECTO = CARPETA_FRONTEND.parent
+
+RUTA_LOGO = CARPETA_FRONTEND / "logo.png"
+RUTA_LOGO_IZQUIERDA = CARPETA_FRONTEND / "logo_gobrlima.png"
+RUTA_LOGO_DERECHA = CARPETA_FRONTEND / "logo_hmatucana.png"
+RUTA_FONDO_HOSPITAL = CARPETA_FRONTEND / "fhospm.png"
+
+TITULO_GOOGLE_FORM = "Registro de Biopsias de Gastroenterología"
+
+# =========================================================
+# APPS SCRIPT - CREACIÓN DEL GOOGLE FORM
+# =========================================================
+# Pegue aquí la URL del despliegue Web App de Code.gs.
+# Debe terminar normalmente en /exec
+
+URL_APPS_SCRIPT = st.secrets["URL_APPS_SCRIPT"]
+
+# Debe ser la misma clave configurada en Code.gs.
+CLAVE_APPS_SCRIPT = "gastro-biopsias-2026-2"
+
+
+def listar_formularios_apps_script():
+    """
+    Pide a Apps Script (doGet) la lista de formularios creados.
+    Reemplaza al antiguo GET {URL_BACKEND}/formularios de Render.
+
+    Devuelve una lista de dicts con: form_id_google, titulo,
+    url_responder, url_editar, fecha_creacion.
+    """
+    respuesta = requests.get(
+        URL_APPS_SCRIPT,
+        params={
+            "clave": CLAVE_APPS_SCRIPT,
+            "accion": "listar_formularios",
+        },
+        timeout=15,
+    )
+    respuesta.raise_for_status()
+
+    datos = respuesta.json()
+
+    if not datos.get("ok"):
+        raise ValueError(
+            datos.get(
+                "error",
+                "Apps Script no pudo listar los formularios.",
+            )
+        )
+
+    return datos.get("formularios", [])
+
+
+def agrupar_formularios_por_mes(formularios):
+    """
+    Agrupa los formularios (uno por día) por mes calendario, usando su
+    fecha de creación. Pensado para "Indicadores", donde en vez de
+    elegir un formulario/día suelto se elige un mes y se combinan las
+    respuestas de todos los formularios de ese mes.
+
+    Devuelve una lista de dicts, uno por mes, del más reciente al más
+    antiguo:
+        {"anio": int, "mes": int, "etiqueta": "Septiembre 2026",
+         "formularios": [formulario, ...]}
+    Los formularios sin una fecha de creación válida se omiten.
+    """
+    grupos = {}
+
+    for formulario in formularios:
+        texto_fecha = str(
+            formulario.get("fecha_creacion", "") or ""
+        ).strip()
+        if not texto_fecha:
+            continue
+        try:
+            fecha = datetime.fromisoformat(
+                texto_fecha.replace("Z", "+00:00")
+            ).date()
+        except ValueError:
+            continue
+
+        clave = (fecha.year, fecha.month)
+        grupos.setdefault(clave, []).append(formulario)
+
+    meses = [
+        {
+            "anio": anio,
+            "mes": mes,
+            "etiqueta": f"{MESES_ES[mes]} {anio}",
+            "formularios": formularios_del_mes,
+        }
+        for (anio, mes), formularios_del_mes in grupos.items()
+    ]
+
+    meses.sort(
+        key=lambda grupo: (grupo["anio"], grupo["mes"]),
+        reverse=True,
+    )
+
+    return meses
+
+
+def obtener_respuestas_apps_script(form_id):
+    """
+    Pide a Apps Script (doGet) las respuestas guardadas del
+    formulario indicado.
+
+    Reemplaza la antigua consulta directa a la API de Google Forms,
+    que exigia credentials.json y abrir el navegador para autorizar
+    (por eso el reporte fallaba en la version publicada en Streamlit
+    Cloud: ahi no hay navegador ni archivo de credenciales).
+
+    Devuelve una lista de dicts "crudos": cada uno con el titulo de
+    cada pregunta del formulario como clave y la respuesta como
+    valor, mas "_fecha_envio_iso" con la marca de tiempo del envio.
+    """
+    respuesta = requests.get(
+        URL_APPS_SCRIPT,
+        params={
+            "clave": CLAVE_APPS_SCRIPT,
+            "accion": "obtener_respuestas",
+            "form_id": form_id,
+        },
+        timeout=30,
+    )
+    respuesta.raise_for_status()
+
+    datos = respuesta.json()
+
+    if not datos.get("ok"):
+        raise ValueError(
+            datos.get(
+                "error",
+                "Apps Script no pudo obtener las respuestas.",
+            )
+        )
+
+    return datos.get("registros", [])
+
+
+def guardar_respuesta_apps_script(form_id, fila):
+    """
+    Envía un registro (una fila) a Apps Script para que lo agregue a
+    la hoja de registro del día indicado. Reemplaza al envío del
+    Google Form: antes lo hacía Google al enviar el formulario, ahora
+    lo hace este POST cuando alguien aprieta "Guardar registro" en el
+    formulario nativo de Streamlit.
+    """
+    respuesta = requests.post(
+        URL_APPS_SCRIPT,
+        json={
+            "clave": CLAVE_APPS_SCRIPT,
+            "accion": "guardar_respuesta",
+            "form_id": form_id,
+            "fila": fila,
+        },
+        timeout=30,
+    )
+    respuesta.raise_for_status()
+
+    try:
+        datos = respuesta.json()
+    except ValueError as error:
+        raise ValueError(
+            "Apps Script no devolvió una respuesta JSON válida."
+        ) from error
+
+    if not datos.get("ok"):
+        raise ValueError(
+            datos.get(
+                "error",
+                "Apps Script no pudo guardar el registro.",
+            )
+        )
+
+    return datos
+
+
+# Si logo.png no existe, intenta buscar estomago.png
+if not RUTA_LOGO.exists():
+    RUTA_LOGO = CARPETA_FRONTEND / "estomago.png"
+
+ICONO_PAGINA = str(RUTA_LOGO) if RUTA_LOGO.exists() else "🩺"
+
+
+def obtener_logo_transparente(ruta_logo):
+    """
+    Quita únicamente el fondo parecido al color de la esquina del PNG.
+    Conserva el dibujo del logo y devuelve una imagen PNG en memoria.
+    """
+    if not ruta_logo.exists():
+        return None
+
+    imagen = Image.open(ruta_logo).convert("RGBA")
+    fondo = imagen.getpixel((0, 0))
+
+    # Si ya tiene transparencia real, se usa tal cual.
+    if fondo[3] < 20:
+        salida = BytesIO()
+        imagen.save(salida, format="PNG")
+        salida.seek(0)
+        return salida.getvalue()
+
+    fr, fg, fb, _ = fondo
+    pixeles = []
+
+    for r, g, b, a in imagen.getdata():
+        distancia = (
+            (r - fr) ** 2 +
+            (g - fg) ** 2 +
+            (b - fb) ** 2
+        ) ** 0.5
+
+        # Solo elimina colores muy parecidos al fondo original.
+        if distancia < 42:
+            pixeles.append((r, g, b, 0))
+        else:
+            pixeles.append((r, g, b, a))
+
+    imagen.putdata(pixeles)
+
+    salida = BytesIO()
+    imagen.save(salida, format="PNG")
+    salida.seek(0)
+
+    return salida.getvalue()
+
+
+
+def obtener_imagen_base64(ruta_imagen):
+    """
+    Convierte una imagen local a base64 para usarla como fondo CSS.
+    """
+    if not ruta_imagen.exists():
+        return ""
+
+    return base64.b64encode(
+        ruta_imagen.read_bytes()
+    ).decode("utf-8")
+
+
+FONDO_HOSPITAL_BASE64 = obtener_imagen_base64(
+    RUTA_FONDO_HOSPITAL
+)
+
+
+st.set_page_config(
+    page_title="GastroEnterología",
+    page_icon=ICONO_PAGINA,
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+# =========================================================
+# CAMPOS DEL FORMULARIO
+# =========================================================
+
+# La columna "Firma" NO se crea en Google Forms.
+# Se agrega únicamente al reporte/Excel y siempre queda en blanco
+# para la firma física posterior.
+#
+# N.º Biopsia ahora contiene dos cuadrículas:
+#   1) Procedimiento y cantidad: cada procedimiento aparece en una fila.
+#   2) Biopsia y cantidad: cada zona aparece en una fila.
+# La cantidad se marca en la misma fila, evitando preguntas separadas debajo.
+PROCEDIMIENTOS_BIOPSIA = [
+    "Endoscopia",
+    "Colonoscopia",
+    "Sigmoidoscopia",
+    "Proctoscopia",
+    "Otros",
+]
+
+BIOPSIAS_POR_PROCEDIMIENTO = {
+    "Endoscopia": [
+        "Antro",
+        "Cuerpo",
+        "Ángulo",
+        "Otros",
+    ],
+    "Colonoscopia": [
+        "Recto",
+        "Colon ascendente",
+        "Colon transverso",
+        "Pólipo",
+        "Otros",
+    ],
+    "Sigmoidoscopia": [
+        "Sigmoides",
+        "Otros",
+    ],
+    "Proctoscopia": [
+        "Recto",
+        "Otros",
+    ],
+
+}
+
+# Lista general usada para crear el combo de Google Forms.
+# Se mantiene una sola pregunta Biopsia para que el reporte sea simple.
+CATEGORIAS_BIOPSIA = [
+    "Antro",
+    "Cuerpo",
+    "Ángulo",
+    "Recto",
+    "Colon ascendente",
+    "Colon transverso",
+    "Pólipo",
+    "Otros",
+]
+
+# Columnas del cuaderno físico (Sedación/Anestesia hasta Mucosectomía).
+# Igual que Biopsia, es una cuadrícula: cada técnica en una fila, cantidad
+# al costado.
+PROCEDIMIENTOS_ADICIONALES = [
+    "Sedación",
+    "Anestesia",
+    "APL",
+    "ELVE",
+    "Colocación enema",
+    "Inyectoterapia",
+    "Clip",
+    "Polipectm alta",
+    "Polipectm baja",
+    "Mucosectomía",
+]
+
+PREFIJO_CANTIDAD_PROCEDIMIENTO = "Cantidad procedimiento - "
+PREFIJO_CANTIDAD_BIOPSIA = "Biopsia - "
+PREFIJO_CANTIDAD_ADICIONAL = "Adicional - "
+
+# Nombres anteriores de estas dos columnas (con la palabra "Cantidad"),
+# usados por las hojas de Google Sheets creadas antes de este cambio.
+# Se mantienen solo para poder seguir leyendo esos registros viejos.
+PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR = "Cantidad biopsia - "
+PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR = "Cantidad adicional - "
+
+
+def obtener_cantidad_compat(registro, prefijo_nuevo, prefijo_anterior, opcion):
+    """Lee una cantidad probando primero el nombre de columna nuevo y,
+    si no hay valor, el nombre anterior (para no perder los reportes de
+    hojas de Google Sheets creadas antes de renombrar las columnas)."""
+    valor = registro.get(f"{prefijo_nuevo}{opcion}", "")
+    if valor:
+        return valor
+    return registro.get(f"{prefijo_anterior}{opcion}", "")
+
+# Códigos de los equipos (endoscopios/colonoscopios) que aparecen en el
+# cuaderno físico, columna "Equipos". "Otros" habilita el texto libre
+# "Otro equipo".
+EQUIPOS_DISPONIBLES = [
+    "Q2338",
+    "Q2405",
+    "Q2401",
+    "Otros",
+]
+
+# Columnas que se mostrarán en las cuadrículas de Google Forms.
+# Deje la fila en blanco cuando ese procedimiento/biopsia no corresponda.
+CANTIDADES_GRID = [str(numero) for numero in range(1, 9)]
+
+CAMPOS_FORMULARIO = [
+    {
+        "titulo": "Fecha",
+        "tipo": "fecha",
+        "obligatorio": True,
+    },
+    {
+        "titulo": "N.º Biopsia",
+        "tipo": "biopsia",
+        "procedimientos": PROCEDIMIENTOS_BIOPSIA,
+        "biopsias_por_procedimiento": BIOPSIAS_POR_PROCEDIMIENTO,
+        "categorias": CATEGORIAS_BIOPSIA,
+        "adicionales": PROCEDIMIENTOS_ADICIONALES,
+        "equipos": EQUIPOS_DISPONIBLES,
+        # Procedimiento ahora es selección única + cantidad aparte
+        # (ya no es cuadrícula). Biopsia y cantidad y Adicionales siguen
+        # siendo cuadrícula.
+        "procedimiento_cuadricula": False,
+        "cantidad_por_fila": True,
+        "cantidades": CANTIDADES_GRID,
+        "obligatorio": False,
+    },
+    {
+        "titulo": "Médico",
+        "tipo": "parrafo",
+        "obligatorio": True,
+    },
+    {
+        "titulo": "Enfermera",
+        "tipo": "parrafo",
+        "obligatorio": True,
+    },
+    {
+        "titulo": "Técnica",
+        "tipo": "parrafo",
+        "obligatorio": True,
+    },
+    {
+        "titulo": "Observaciones",
+        "tipo": "parrafo",
+        "obligatorio": False,
+    },
+]
+
+
+# =========================================================
+# HOJA DE REGISTRO DEL DÍA (antes: GOOGLE FORMS)
+# =========================================================
+
+def crear_registro_del_dia(progreso=None):
+    """
+    Crea (o encuentra) la hoja de registro de hoy mediante Apps Script.
+
+    Reemplaza a crear_google_form: ya no crea un Google Form, crea una
+    Google Sheet con los encabezados de ENCABEZADOS_RESPUESTA (ver
+    Code.gs) donde el formulario nativo de Streamlit va a escribir
+    cada registro directamente.
+    """
+    if (
+        not URL_APPS_SCRIPT
+        or URL_APPS_SCRIPT == "PEGAR_AQUI_URL_WEB_APP"
+        or not URL_APPS_SCRIPT.startswith("https://")
+    ):
+        raise ValueError(
+            "Falta configurar URL_APPS_SCRIPT con la URL /exec "
+            "del Web App de Google Apps Script."
+        )
+
+    print(f"[APPS SCRIPT] Creando hoja de registro mediante: {URL_APPS_SCRIPT}")
+
+    fecha_hoy_texto = datetime.now(
+        ZoneInfo("America/Lima")
+    ).strftime("%d/%m/%Y")
+
+    titulo_hoja = (
+        f"{TITULO_GOOGLE_FORM} - {fecha_hoy_texto}"
+    )
+
+    respuesta = requests.post(
+        URL_APPS_SCRIPT,
+        json={
+            "clave": CLAVE_APPS_SCRIPT,
+            "titulo": titulo_hoja,
+            # Cada día necesita su propia hoja con ID propio, se pide
+            # siempre una nueva aquí (igual que antes con el Form).
+            "forzar_nuevo": True,
+        },
+        timeout=60,
+    )
+
+    respuesta.raise_for_status()
+
+    if progreso is not None:
+        progreso.progress(
+            60,
+            text="Preparando hoja de registro..."
+        )
+
+    try:
+        datos = respuesta.json()
+    except ValueError as error:
+        raise ValueError(
+            "Apps Script no devolvió una respuesta JSON válida."
+        ) from error
+
+    if not datos.get("ok"):
+        raise ValueError(
+            datos.get(
+                "error",
+                "Apps Script no pudo crear la hoja de registro.",
+            )
+        )
+
+    if progreso is not None:
+        progreso.progress(
+            90,
+            text="Hoja lista"
+        )
+
+    return {
+        "form_id": datos["form_id"],
+        "titulo": titulo_hoja,
+        "url_hoja": datos["url_hoja"],
+    }
+
+
+def convertir_fecha_creacion_formulario(valor):
+    """
+    Convierte fecha_creacion del backend a date.
+    Soporta fecha simple, timestamp SQLite e ISO.
+    """
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return None
+
+    try:
+        fecha_iso = datetime.fromisoformat(
+            texto.replace("Z", "+00:00")
+        )
+
+        if fecha_iso.tzinfo is not None:
+            fecha_iso = fecha_iso.astimezone(
+                ZoneInfo("America/Lima")
+            )
+
+        return fecha_iso.date()
+    except ValueError:
+        pass
+
+    for formato in (
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y",
+    ):
+        try:
+            return datetime.strptime(texto, formato).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def obtener_formulario_hoy():
+    """
+    Consulta Apps Script (Google). Si responde pero no hay una hoja de
+    registro creada hoy, devuelve None (para habilitar el botón de
+    creación). Ya no hay una hoja fija de respaldo: si Apps Script no
+    responde, el error se deja propagar (lo maneja quien llama a esta
+    función).
+    """
+    formularios = listar_formularios_apps_script()
+
+    hoy = datetime.now(
+        ZoneInfo("America/Lima")
+    ).date()
+
+    for formulario in formularios:
+        fecha_formulario = convertir_fecha_creacion_formulario(
+            formulario.get("fecha_creacion")
+        )
+
+        if fecha_formulario == hoy:
+            return formulario
+
+    # Apps Script respondió correctamente pero no hay una hoja de
+    # registro creada hoy.
+    return None
+
+
+def cargar_formulario_hoy_en_sesion(formulario):
+    """
+    Recupera el ID y la URL de la hoja de registro de hoy y los deja
+    listos para el paso 2 (formulario nativo) y el paso 3 (ver
+    respuestas), incluso después de reiniciar Streamlit.
+    """
+    if not formulario:
+        return
+
+    form_id = str(
+        formulario.get("form_id_google", "") or ""
+    ).strip()
+    url_hoja = str(
+        formulario.get("url_editar")
+        or formulario.get("url_responder")
+        or ""
+    ).strip()
+
+    st.session_state["form_id"] = form_id
+    st.session_state["form_url"] = url_hoja
+    st.session_state["form_fecha_activa"] = datetime.now(
+        ZoneInfo("America/Lima")
+    ).strftime("%Y-%m-%d")
+
+
+# =========================================================
+# REPORTES EN EXCEL
+# =========================================================
+
+MESES_ES = {
+    1: "Enero",
+    2: "Febrero",
+    3: "Marzo",
+    4: "Abril",
+    5: "Mayo",
+    6: "Junio",
+    7: "Julio",
+    8: "Agosto",
+    9: "Septiembre",
+    10: "Octubre",
+    11: "Noviembre",
+    12: "Diciembre",
+}
+
+COLUMNAS_REPORTE = (
+    [
+        "Fecha",
+        "Médico",
+        "Enfermera",
+        "Técnica",
+        "Procedimiento",
+        "Cantidad",
+        "Equipos",
+    ]
+    + [f"Biopsia [{categoria}]" for categoria in CATEGORIAS_BIOPSIA]
+    + ["Otra biopsia"]
+    + [f"Proc. adic [{adicional}]" for adicional in PROCEDIMIENTOS_ADICIONALES]
+    + ["Observaciones"]
+)
+
+# Columnas de texto libre: se alinean a la izquierda en el Excel. El resto
+# (fechas, cantidades, columnas de la cuadrícula) se centra.
+COLUMNAS_TEXTO_LARGO = {
+    "Médico",
+    "Enfermera",
+    "Técnica",
+    "Procedimiento",
+    "Otra biopsia",
+    "Observaciones",
+}
+
+
+def convertir_fecha_formulario(valor):
+    """
+    Convierte el campo Fecha del formulario en date.
+    """
+    if isinstance(valor, date):
+        return valor
+
+    texto = str(valor or "").strip()
+
+    for formato in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(texto, formato).date()
+        except ValueError:
+            continue
+
+    return None
+
+
+def convertir_fecha_envio_peru(valor):
+    """
+    Convierte la fecha de envío de Google Forms a hora de Perú.
+    """
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return None
+
+    try:
+        fecha_hora = datetime.fromisoformat(
+            texto.replace("Z", "+00:00")
+        )
+
+        if fecha_hora.tzinfo is None:
+            fecha_hora = fecha_hora.replace(
+                tzinfo=ZoneInfo("UTC")
+            )
+
+        return fecha_hora.astimezone(
+            ZoneInfo("America/Lima")
+        )
+
+    except (TypeError, ValueError):
+        return None
+
+
+def obtener_todas_respuestas_google(servicio_forms, form_id):
+    """
+    Obtiene todas las respuestas, incluyendo formularios con paginación.
+    """
+    respuestas = []
+    token = None
+
+    while True:
+        solicitud = servicio_forms.forms().responses().list(
+            formId=form_id,
+            pageToken=token,
+        )
+
+        resultado = solicitud.execute()
+        respuestas.extend(resultado.get("responses", []))
+
+        token = resultado.get("nextPageToken")
+        if not token:
+            break
+
+    return respuestas
+
+
+def obtener_registros_formulario(form_id):
+    """
+    Consulta las respuestas del Google Form seleccionado a traves de
+    Apps Script (sin credentials.json ni autorizacion interactiva),
+    por lo que funciona igual en tu computadora y en la app publicada.
+    """
+    registros_crudos = obtener_respuestas_apps_script(form_id)
+
+    registros = []
+
+    for registro in registros_crudos:
+        fecha_envio_texto = registro.get("_fecha_envio_iso", "")
+
+        fecha_envio_peru = convertir_fecha_envio_peru(
+            fecha_envio_texto
+        )
+
+        # Reconstruye las selecciones de Procedimiento y Biopsia a partir
+        # de las filas de la cuadrícula que sí tienen una cantidad marcada.
+        procedimientos_seleccionados = [
+            opcion
+            for opcion in PROCEDIMIENTOS_BIOPSIA
+            if str(
+                registro.get(
+                    f"{PREFIJO_CANTIDAD_PROCEDIMIENTO}{opcion}",
+                    "",
+                )
+                or ""
+            ).strip()
+        ]
+        biopsias_seleccionadas = [
+            opcion
+            for opcion in CATEGORIAS_BIOPSIA
+            if str(
+                obtener_cantidad_compat(
+                    registro,
+                    PREFIJO_CANTIDAD_BIOPSIA,
+                    PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR,
+                    opcion,
+                )
+                or ""
+            ).strip()
+        ]
+        adicionales_seleccionados = [
+            opcion
+            for opcion in PROCEDIMIENTOS_ADICIONALES
+            if str(
+                obtener_cantidad_compat(
+                    registro,
+                    PREFIJO_CANTIDAD_ADICIONAL,
+                    PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR,
+                    opcion,
+                )
+                or ""
+            ).strip()
+        ]
+
+        if procedimientos_seleccionados:
+            registro["Procedimiento"] = ", ".join(
+                procedimientos_seleccionados
+            )
+            registro["_lista_Procedimiento"] = procedimientos_seleccionados
+
+        if biopsias_seleccionadas:
+            registro["Biopsia"] = ", ".join(biopsias_seleccionadas)
+            registro["_lista_Biopsia"] = biopsias_seleccionadas
+
+        if adicionales_seleccionados:
+            registro["ProcedimientosAdicionales"] = ", ".join(
+                adicionales_seleccionados
+            )
+            registro["_lista_ProcedimientosAdicionales"] = (
+                adicionales_seleccionados
+            )
+
+        registro["_fecha"] = convertir_fecha_formulario(
+            registro.get("Fecha")
+        )
+        registro["_fecha_envio"] = fecha_envio_peru
+
+        registros.append(registro)
+
+    registros.sort(
+        key=lambda registro: (
+            registro.get("_fecha") or date.min,
+            registro.get("_fecha_envio")
+            or datetime.min.replace(
+                tzinfo=ZoneInfo("America/Lima")
+            ),
+        )
+    )
+
+    return registros
+
+
+def normalizar_check(valor):
+    """
+    Convierte la respuesta de una casilla en una marca visual.
+    """
+    texto = str(valor or "").strip().lower()
+
+    if texto in {
+        "sí",
+        "si",
+        "true",
+        "1",
+        "x",
+        "✓",
+        "check",
+    }:
+        return "✓"
+
+    return ""
+
+
+def obtener_selecciones_registro(registro, titulo):
+    """
+    Devuelve las opciones marcadas de una pregunta checkbox.
+    En formularios nuevos se conserva la lista original. En formularios
+    antiguos se intenta recuperar desde el texto separado por comas.
+    """
+    lista = registro.get(f"_lista_{titulo}")
+
+    if isinstance(lista, list):
+        return [str(valor).strip() for valor in lista if str(valor).strip()]
+
+    texto = str(registro.get(titulo, "") or "").strip()
+    if not texto:
+        return []
+
+    return [parte.strip() for parte in texto.split(",") if parte.strip()]
+
+
+def tiene_cantidades_por_opcion_procedimiento(registro):
+    """Indica si la respuesta usa la cuadrícula de Procedimiento
+    (formularios antiguos). Los formularios nuevos usan selección única
+    + cantidad, así que esto da False para ellos."""
+    return any(
+        str(clave).startswith(PREFIJO_CANTIDAD_PROCEDIMIENTO)
+        for clave in registro.keys()
+    )
+
+
+def tiene_cantidades_por_opcion_biopsia(registro):
+    """Indica si la respuesta usa la cuadrícula de Biopsia y cantidad."""
+    return any(
+        str(clave).startswith(PREFIJO_CANTIDAD_BIOPSIA)
+        or str(clave).startswith(PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR)
+        for clave in registro.keys()
+    )
+
+
+def tiene_cantidades_por_opcion_adicional(registro):
+    """Indica si la respuesta usa la cuadrícula de Procedimientos
+    adicionales y cantidad (APL, ELVE, enema, etc.)."""
+    return any(
+        str(clave).startswith(PREFIJO_CANTIDAD_ADICIONAL)
+        or str(clave).startswith(PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR)
+        for clave in registro.keys()
+    )
+
+
+def tiene_cantidades_por_opcion(registro):
+    """Indica si la respuesta pertenece al nuevo formato de cantidades,
+    ya sea en Procedimiento, en Biopsia, en Adicionales, o en varios."""
+    return (
+        tiene_cantidades_por_opcion_procedimiento(registro)
+        or tiene_cantidades_por_opcion_biopsia(registro)
+        or tiene_cantidades_por_opcion_adicional(registro)
+    )
+
+
+def obtener_items_con_cantidad(
+    registro,
+    titulo_seleccion,
+    opciones_catalogo,
+    prefijo_cantidad,
+    campo_otro_compatibilidad=None,
+    prefijo_cantidad_anterior=None,
+):
+    """
+    Devuelve una lista de (nombre, cantidad) para procedimientos o biopsias.
+
+    - Las opciones conocidas usan su propia pregunta de cantidad.
+    - La opción nativa "Otros" de Google Forms devuelve normalmente el texto
+      escrito por el usuario; ese texto usa la cantidad correspondiente a
+      "Otros".
+    - También recupera cantidades llenadas aunque el checkbox se haya omitido,
+      para no perder datos en el reporte.
+    - Si se indica prefijo_cantidad_anterior, también revisa ese nombre de
+      columna (hojas creadas antes de renombrar las columnas).
+    """
+    def leer_cantidad(opcion):
+        if prefijo_cantidad_anterior:
+            return obtener_cantidad_compat(
+                registro,
+                prefijo_cantidad,
+                prefijo_cantidad_anterior,
+                opcion,
+            )
+        return registro.get(f"{prefijo_cantidad}{opcion}", "")
+
+    catalogo_fijo = [
+        opcion for opcion in opciones_catalogo
+        if str(opcion).casefold() != "otros"
+    ]
+    selecciones = obtener_selecciones_registro(registro, titulo_seleccion)
+    vistos = set()
+    items = []
+
+    def agregar(nombre, cantidad):
+        nombre = str(nombre or "").strip()
+        cantidad = str(cantidad or "").strip()
+        if not nombre:
+            return
+        clave = nombre.casefold()
+        if clave in vistos:
+            return
+        vistos.add(clave)
+        items.append((nombre, cantidad))
+
+    for seleccion in selecciones:
+        if seleccion in catalogo_fijo:
+            agregar(
+                seleccion,
+                leer_cantidad(seleccion),
+            )
+            continue
+
+        # Puede venir literalmente "Otros" en versiones anteriores o puede
+        # venir directamente el texto digitado en la opción nativa Otros.
+        nombre_otro = seleccion
+        if seleccion.casefold() == "otros" and campo_otro_compatibilidad:
+            nombre_compatibilidad = str(
+                registro.get(campo_otro_compatibilidad, "") or ""
+            ).strip()
+            if nombre_compatibilidad:
+                nombre_otro = nombre_compatibilidad
+
+        agregar(
+            nombre_otro,
+            leer_cantidad("Otros"),
+        )
+
+    # Si alguien escribió una cantidad pero olvidó marcar la casilla,
+    # igualmente se conserva en los reportes.
+    for opcion in catalogo_fijo:
+        cantidad = str(leer_cantidad(opcion) or "").strip()
+        if cantidad:
+            agregar(opcion, cantidad)
+
+    cantidad_otros = str(leer_cantidad("Otros") or "").strip()
+    if cantidad_otros:
+        nombre_otro = "Otros"
+        if campo_otro_compatibilidad:
+            nombre_compatibilidad = str(
+                registro.get(campo_otro_compatibilidad, "") or ""
+            ).strip()
+            if nombre_compatibilidad:
+                nombre_otro = nombre_compatibilidad
+        agregar(nombre_otro, cantidad_otros)
+
+    return items
+
+
+def obtener_procedimientos_con_cantidad(registro):
+    return obtener_items_con_cantidad(
+        registro=registro,
+        titulo_seleccion="Procedimiento",
+        opciones_catalogo=PROCEDIMIENTOS_BIOPSIA,
+        prefijo_cantidad=PREFIJO_CANTIDAD_PROCEDIMIENTO,
+        campo_otro_compatibilidad="Otro procedimiento",
+    )
+
+
+def obtener_biopsias_con_cantidad(registro):
+    return obtener_items_con_cantidad(
+        registro=registro,
+        titulo_seleccion="Biopsia",
+        opciones_catalogo=CATEGORIAS_BIOPSIA,
+        prefijo_cantidad=PREFIJO_CANTIDAD_BIOPSIA,
+        campo_otro_compatibilidad="Otra biopsia",
+        prefijo_cantidad_anterior=PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR,
+    )
+
+
+def obtener_adicionales_con_cantidad(registro):
+    return obtener_items_con_cantidad(
+        registro=registro,
+        titulo_seleccion="ProcedimientosAdicionales",
+        opciones_catalogo=PROCEDIMIENTOS_ADICIONALES,
+        prefijo_cantidad=PREFIJO_CANTIDAD_ADICIONAL,
+        campo_otro_compatibilidad=None,
+        prefijo_cantidad_anterior=PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR,
+    )
+
+
+def resolver_procedimiento_biopsia(registro):
+    """
+    Devuelve el nombre del procedimiento seleccionado.
+
+    Funciona tanto para el formulario nuevo (selección única "Procedimiento")
+    como para formularios antiguos (checkbox de varias opciones). En ambos
+    casos, si la opción elegida es "Otros", se sustituye por el texto
+    escrito en "Otro procedimiento".
+    """
+    selecciones = obtener_selecciones_registro(registro, "Procedimiento")
+    if selecciones:
+        resueltas = []
+        for seleccion in selecciones:
+            if seleccion.casefold() == "otros":
+                procedimiento_otro = str(
+                    registro.get("Otro procedimiento", "") or ""
+                ).strip()
+                resueltas.append(procedimiento_otro or seleccion)
+            else:
+                resueltas.append(seleccion)
+        return ", ".join(resueltas)
+
+    procedimiento = str(registro.get("Procedimiento", "") or "").strip()
+    if procedimiento.casefold() == "otros":
+        procedimiento_otro = str(
+            registro.get("Otro procedimiento", "") or ""
+        ).strip()
+        if procedimiento_otro:
+            return procedimiento_otro
+    return procedimiento
+
+
+def resolver_equipos(registro):
+    """
+    Devuelve el código de equipo seleccionado (columna "Equipos" del
+    cuaderno físico). Si se eligió "Otros", se sustituye por el texto
+    escrito en "Otro equipo".
+    """
+    equipo = str(registro.get("Equipos", "") or "").strip()
+    if equipo.casefold() == "otros":
+        equipo_otro = str(registro.get("Otro equipo", "") or "").strip()
+        if equipo_otro:
+            return equipo_otro
+    return equipo
+
+
+def resolver_nombre_biopsia(registro):
+    """Compatibilidad con formularios antiguos de una sola cantidad."""
+    selecciones = obtener_selecciones_registro(registro, "Biopsia")
+    if selecciones:
+        return ", ".join(selecciones)
+
+    nombre = str(registro.get("Biopsia", "") or "").strip()
+    if nombre.casefold() == "otros":
+        nombre_otro = str(registro.get("Otra biopsia", "") or "").strip()
+        if nombre_otro:
+            return nombre_otro
+    return nombre
+
+
+def inferir_procedimiento_por_biopsia(nombre):
+    """Compatibilidad con formularios antiguos."""
+    nombre_limpio = str(nombre or "").strip()
+    for procedimiento, categorias in BIOPSIAS_POR_PROCEDIMIENTO.items():
+        categorias_sin_otros = [
+            categoria for categoria in categorias if categoria != "Otros"
+        ]
+        if nombre_limpio in categorias_sin_otros:
+            return procedimiento
+    return ""
+
+
+def formatear_items_cantidad(items):
+    partes = []
+    for nombre, cantidad in items:
+        if cantidad:
+            partes.append(f"{nombre} ({cantidad})")
+        else:
+            partes.append(nombre)
+    return "; ".join(partes)
+
+
+def formatear_biopsias(registro):
+    """
+    Construye la celda N.º Biopsia del Excel.
+
+    Formato nuevo:
+        Procedimientos: Endoscopia (2); Colonoscopia (1)
+        Biopsias: Antro (3); Recto (1)
+
+    Mantiene compatibilidad con formularios anteriores.
+    """
+    usa_grid_procedimiento = tiene_cantidades_por_opcion_procedimiento(
+        registro
+    )
+    usa_grid_biopsia = tiene_cantidades_por_opcion_biopsia(registro)
+    usa_grid_adicional = tiene_cantidades_por_opcion_adicional(registro)
+
+    if usa_grid_procedimiento or usa_grid_biopsia or usa_grid_adicional:
+        lineas = []
+
+        if usa_grid_procedimiento:
+            procedimientos = obtener_procedimientos_con_cantidad(registro)
+            if procedimientos:
+                lineas.append(
+                    "Procedimientos: "
+                    + formatear_items_cantidad(procedimientos)
+                )
+        else:
+            # Formulario nuevo: Procedimiento es selección única + Cantidad.
+            procedimiento = resolver_procedimiento_biopsia(registro)
+            cantidad_procedimiento = str(
+                registro.get("Cantidad", "") or ""
+            ).strip()
+            if procedimiento:
+                if cantidad_procedimiento:
+                    lineas.append(
+                        f"Procedimiento: {procedimiento} "
+                        f"({cantidad_procedimiento})"
+                    )
+                else:
+                    lineas.append(f"Procedimiento: {procedimiento}")
+
+        if usa_grid_biopsia:
+            biopsias = obtener_biopsias_con_cantidad(registro)
+            if biopsias:
+                lineas.append(
+                    "Biopsias: " + formatear_items_cantidad(biopsias)
+                )
+
+        if usa_grid_adicional:
+            adicionales = obtener_adicionales_con_cantidad(registro)
+            if adicionales:
+                lineas.append(
+                    "Adicionales: " + formatear_items_cantidad(adicionales)
+                )
+
+        if lineas:
+            return "\n".join(lineas)
+
+    # ---------------- FORMATO ANTERIOR ----------------
+    procedimiento = resolver_procedimiento_biopsia(registro)
+    nombre = resolver_nombre_biopsia(registro)
+    cantidad = str(registro.get("Cantidad", "") or "").strip()
+
+    if not procedimiento and nombre:
+        procedimiento = inferir_procedimiento_por_biopsia(nombre)
+
+    partes = []
+    if procedimiento:
+        partes.append(procedimiento)
+    if nombre:
+        partes.append(f"- {nombre}" if partes else nombre)
+
+    texto = " ".join(partes).strip()
+    if texto and cantidad:
+        return f"{texto} ({cantidad})"
+    if texto:
+        return texto
+
+    # Compatibilidad con la versión anterior de 3 pares.
+    lineas = []
+    for numero_biopsia in range(1, 4):
+        nombre_anterior = str(
+            registro.get(f"Biopsia {numero_biopsia} - Nombre", "") or ""
+        ).strip()
+        cantidad_anterior = str(
+            registro.get(f"Biopsia {numero_biopsia} - Cantidad", "") or ""
+        ).strip()
+
+        if nombre_anterior:
+            procedimiento_anterior = inferir_procedimiento_por_biopsia(
+                nombre_anterior
+            )
+            prefijo = f"{procedimiento_anterior} - " if procedimiento_anterior else ""
+            if cantidad_anterior:
+                lineas.append(
+                    f"{prefijo}{nombre_anterior} ({cantidad_anterior})"
+                )
+            else:
+                lineas.append(f"{prefijo}{nombre_anterior}")
+
+    # Compatibilidad con la estructura más antigua, una cantidad por zona.
+    if not lineas:
+        for categoria in CATEGORIAS_BIOPSIA:
+            if categoria == "Otros":
+                continue
+            cantidad_anterior = str(
+                registro.get(f"Biopsia - {categoria}", "") or ""
+            ).strip()
+            if cantidad_anterior:
+                procedimiento_anterior = inferir_procedimiento_por_biopsia(
+                    categoria
+                )
+                prefijo = f"{procedimiento_anterior} - " if procedimiento_anterior else ""
+                lineas.append(
+                    f"{prefijo}{categoria} ({cantidad_anterior})"
+                )
+
+    return "\n".join(lineas)
+
+def convertir_cantidad_biopsia(valor):
+    """
+    Convierte una cantidad escrita como texto a entero para indicadores.
+    Si no es un número entero válido, devuelve 0 sin alterar el reporte.
+    """
+    texto = str(valor or "").strip()
+
+    if not texto:
+        return 0
+
+    try:
+        return int(float(texto.replace(",", ".")))
+    except (TypeError, ValueError):
+        return 0
+
+
+def construir_filas_reporte(registros):
+    """
+    Convierte cada respuesta en una fila del registro de biopsias, con
+    una columna por cada dato: igual que la hoja de respuestas del
+    Google Form (una columna por procedimiento/cantidad, una por cada
+    zona de biopsia y una por cada procedimiento adicional).
+    """
+    filas = []
+
+    for registro in registros:
+        fecha = registro.get("_fecha")
+
+        if tiene_cantidades_por_opcion_procedimiento(registro):
+            # Formularios antiguos: Procedimiento era una cuadrícula con
+            # varias opciones posibles a la vez.
+            items_procedimiento = obtener_procedimientos_con_cantidad(
+                registro
+            )
+            procedimiento = ", ".join(
+                nombre for nombre, _ in items_procedimiento
+            )
+            cantidad = ", ".join(
+                cantidad_texto
+                for _, cantidad_texto in items_procedimiento
+                if cantidad_texto
+            )
+        else:
+            # Formulario actual: Procedimiento es selección única, con su
+            # propia pregunta "Cantidad" aparte.
+            procedimiento = resolver_procedimiento_biopsia(registro)
+            cantidad = str(registro.get("Cantidad", "") or "").strip()
+
+        fila = {
+            "Fecha": (
+                fecha.strftime("%d/%m/%Y")
+                if fecha
+                else str(registro.get("Fecha", ""))
+            ),
+            "Médico": registro.get(
+                "Médico",
+                registro.get("Médico / Enfermera", ""),
+            ),
+            "Enfermera": registro.get(
+                "Enfermera",
+                "",
+            ),
+            "Técnica": registro.get(
+                "Técnica",
+                registro.get("Persona que recepciona", ""),
+            ),
+            "Procedimiento": procedimiento,
+            "Cantidad": cantidad,
+            "Equipos": resolver_equipos(registro),
+            "Otra biopsia": registro.get("Otra biopsia", ""),
+            "Observaciones": registro.get("Observaciones", ""),
+        }
+
+        for categoria in CATEGORIAS_BIOPSIA:
+            fila[f"Biopsia [{categoria}]"] = obtener_cantidad_compat(
+                registro,
+                PREFIJO_CANTIDAD_BIOPSIA,
+                PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR,
+                categoria,
+            )
+
+        for adicional in PROCEDIMIENTOS_ADICIONALES:
+            fila[f"Proc. adic [{adicional}]"] = obtener_cantidad_compat(
+                registro,
+                PREFIJO_CANTIDAD_ADICIONAL,
+                PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR,
+                adicional,
+            )
+
+        filas.append(fila)
+
+    return filas
+
+
+def construir_totales_procedimientos(registros):
+    """
+    Suma la "Cantidad" agrupada por "Procedimiento" para un conjunto de
+    registros (mismo criterio que usa Indicadores), pensado para
+    mostrarse como hoja aparte en el reporte descargable.
+
+    "Otros" no se cuenta como cajón genérico: solo se suma cuando hay
+    una descripción real en "Otro procedimiento"; si se eligió Otros
+    sin describir de qué se trató, esa cantidad no se cuenta. Dos
+    nombres que solo difieren en mayúsculas/minúsculas (por ejemplo
+    "nuevo procedimiento" y "Nuevo Procedimiento") se tratan como el
+    mismo procedimiento y se suman juntos.
+
+    Devuelve un dict {procedimiento: suma_cantidad}, siempre con las
+    opciones oficiales de PROCEDIMIENTOS_BIOPSIA (salvo "Otros") en 0
+    aunque no aparezcan en el periodo, más cualquier otro valor libre
+    que aparezca en las respuestas.
+    """
+    totales_procedimientos = {}
+    nombre_por_clave = {}
+
+    def sumar(nombre, cantidad):
+        nombre = str(nombre or "").strip()
+        if not nombre or nombre.casefold() == "otros":
+            return
+        clave = nombre.casefold()
+        nombre_normalizado = nombre_por_clave.setdefault(clave, nombre)
+        totales_procedimientos[nombre_normalizado] = (
+            totales_procedimientos.get(nombre_normalizado, 0)
+            + cantidad
+        )
+
+    for opcion in PROCEDIMIENTOS_BIOPSIA:
+        sumar(opcion, 0)
+
+    for registro in registros:
+        if tiene_cantidades_por_opcion_procedimiento(registro):
+            for nombre, cantidad_texto in (
+                obtener_procedimientos_con_cantidad(registro)
+            ):
+                sumar(nombre, convertir_cantidad_biopsia(cantidad_texto))
+        else:
+            procedimiento = resolver_procedimiento_biopsia(registro)
+            cantidad_procedimiento = convertir_cantidad_biopsia(
+                registro.get("Cantidad", "")
+            )
+            sumar(procedimiento, cantidad_procedimiento)
+
+    return totales_procedimientos
+
+
+def construir_totales_biopsias(registros):
+    """
+    Suma la cantidad registrada de cada tipo de biopsia (Antro, Cuerpo,
+    Ángulo, etc.) para un conjunto de registros, pensado para mostrarse
+    como hoja aparte en el reporte descargable.
+
+    "Otros" nunca se cuenta como cajón genérico: solo se suma cuando
+    alguien escribió qué fue en "Otra biopsia", y en ese caso aparece
+    con ese texto como nombre (no como "Otros"). Si se llenó la
+    cantidad de "Otros" pero nadie describió de qué se trató, esa
+    cantidad NO se cuenta en esta hoja (no hay una categoría real a la
+    que asignarla).
+
+    Dos descripciones de "Otros" que solo difieran en mayúsculas/
+    minúsculas (por ejemplo "Biopsia abc" y "biopsia ABC") se tratan
+    como la misma y se suman juntas.
+
+    Devuelve un dict {tipo_biopsia: suma_cantidad} con las categorías
+    oficiales de CATEGORIAS_BIOPSIA (salvo "Otros") en el orden de la
+    libreta física, más cualquier biopsia "Otros" con descripción
+    propia, agregada al final en orden alfabético.
+    """
+    totales_biopsias = {
+        categoria: 0
+        for categoria in CATEGORIAS_BIOPSIA
+        if categoria.casefold() != "otros"
+    }
+    totales_otros = {}
+    nombre_otros_por_clave = {}
+
+    for registro in registros:
+        for categoria in totales_biopsias:
+            totales_biopsias[categoria] += convertir_cantidad_biopsia(
+                obtener_cantidad_compat(
+                    registro,
+                    PREFIJO_CANTIDAD_BIOPSIA,
+                    PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR,
+                    categoria,
+                )
+            )
+
+        texto_otros = str(
+            registro.get("Otra biopsia", "") or ""
+        ).strip()
+        cantidad_otros = convertir_cantidad_biopsia(
+            obtener_cantidad_compat(
+                registro,
+                PREFIJO_CANTIDAD_BIOPSIA,
+                PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR,
+                "Otros",
+            )
+        )
+
+        if texto_otros and cantidad_otros:
+            clave_otros = texto_otros.casefold()
+            nombre_normalizado = nombre_otros_por_clave.setdefault(
+                clave_otros, texto_otros
+            )
+            totales_otros[nombre_normalizado] = (
+                totales_otros.get(nombre_normalizado, 0)
+                + cantidad_otros
+            )
+
+    for nombre, cantidad in sorted(
+        totales_otros.items(),
+        key=lambda item: item[0].lower(),
+    ):
+        totales_biopsias[nombre] = cantidad
+
+    return totales_biopsias
+
+
+def construir_totales_procedimientos_adicionales(registros):
+    """
+    Suma la cantidad registrada de cada procedimiento adicional
+    (Sedación, Anestesia, APL, etc.) para un conjunto de registros,
+    pensado para mostrarse como hoja aparte en el reporte descargable.
+
+    Devuelve un dict {procedimiento_adicional: suma_cantidad} con todas
+    las opciones oficiales de PROCEDIMIENTOS_ADICIONALES, en el mismo
+    orden que la libreta física, aunque alguna quede en 0 en el
+    periodo.
+    """
+    totales_adicionales = {
+        adicional: 0 for adicional in PROCEDIMIENTOS_ADICIONALES
+    }
+
+    for registro in registros:
+        for adicional in PROCEDIMIENTOS_ADICIONALES:
+            totales_adicionales[adicional] += convertir_cantidad_biopsia(
+                obtener_cantidad_compat(
+                    registro,
+                    PREFIJO_CANTIDAD_ADICIONAL,
+                    PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR,
+                    adicional,
+                )
+            )
+
+    return totales_adicionales
+
+
+def agregar_hoja_totales_procedimiento(libro, totales_procedimientos):
+    """
+    Agrega al libro una hoja "Totales por Procedimiento" con la suma de
+    Cantidad de cada procedimiento, más un total general.
+    """
+    hoja = libro.create_sheet("Totales por Procedimiento"[:31])
+
+    relleno_encabezado = PatternFill("solid", fgColor="35566B")
+    fuente_encabezado = Font(color="FFFFFF", bold=True)
+    fuente_total = Font(bold=True)
+    borde_fino = Border(
+        left=Side(style="thin", color="7B8790"),
+        right=Side(style="thin", color="7B8790"),
+        top=Side(style="thin", color="7B8790"),
+        bottom=Side(style="thin", color="7B8790"),
+    )
+    alineacion_centro = Alignment(
+        horizontal="center",
+        vertical="center",
+    )
+
+    hoja.append(["Procedimiento", "Suma de Cantidad"])
+    for celda in hoja[1]:
+        celda.fill = relleno_encabezado
+        celda.font = fuente_encabezado
+        celda.alignment = alineacion_centro
+        celda.border = borde_fino
+
+    filas_ordenadas = sorted(
+        totales_procedimientos.items(),
+        key=lambda item: item[0].lower(),
+    )
+
+    total_general = 0
+    for nombre, cantidad in filas_ordenadas:
+        hoja.append([nombre, cantidad])
+        total_general += cantidad
+        fila_actual = hoja[hoja.max_row]
+        fila_actual[0].border = borde_fino
+        fila_actual[1].border = borde_fino
+        fila_actual[1].alignment = alineacion_centro
+
+    hoja.append(["Total general", total_general])
+    fila_total = hoja[hoja.max_row]
+    for celda in fila_total:
+        celda.font = fuente_total
+        celda.border = borde_fino
+    fila_total[1].alignment = alineacion_centro
+
+    hoja.column_dimensions["A"].width = 28
+    hoja.column_dimensions["B"].width = 18
+    hoja.freeze_panes = "A2"
+    hoja.sheet_view.showGridLines = False
+
+    return hoja
+
+
+def agregar_hoja_totales_tipo(libro, nombre_hoja, encabezado, totales):
+    """
+    Agrega al libro una hoja de totales por tipo (Biopsias / Proc Adic),
+    con el mismo estilo que "Totales por Procedimiento": una fila por
+    cada tipo (en el orden de la libreta física, sin reordenar
+    alfabéticamente, porque son opciones fijas de la cuadrícula) más un
+    total general.
+    """
+    hoja = libro.create_sheet(nombre_hoja[:31])
+
+    relleno_encabezado = PatternFill("solid", fgColor="35566B")
+    fuente_encabezado = Font(color="FFFFFF", bold=True)
+    fuente_total = Font(bold=True)
+    borde_fino = Border(
+        left=Side(style="thin", color="7B8790"),
+        right=Side(style="thin", color="7B8790"),
+        top=Side(style="thin", color="7B8790"),
+        bottom=Side(style="thin", color="7B8790"),
+    )
+    alineacion_centro = Alignment(
+        horizontal="center",
+        vertical="center",
+    )
+
+    hoja.append([encabezado, "Suma de Cantidad"])
+    for celda in hoja[1]:
+        celda.fill = relleno_encabezado
+        celda.font = fuente_encabezado
+        celda.alignment = alineacion_centro
+        celda.border = borde_fino
+
+    total_general = 0
+    for nombre, cantidad in totales.items():
+        hoja.append([nombre, cantidad])
+        total_general += cantidad
+        fila_actual = hoja[hoja.max_row]
+        fila_actual[0].border = borde_fino
+        fila_actual[1].border = borde_fino
+        fila_actual[1].alignment = alineacion_centro
+
+    hoja.append(["Total general", total_general])
+    fila_total = hoja[hoja.max_row]
+    for celda in fila_total:
+        celda.font = fuente_total
+        celda.border = borde_fino
+    fila_total[1].alignment = alineacion_centro
+
+    hoja.column_dimensions["A"].width = 28
+    hoja.column_dimensions["B"].width = 18
+    hoja.freeze_panes = "A2"
+    hoja.sheet_view.showGridLines = False
+
+    return hoja
+
+
+def agregar_hoja_biopsias(libro, totales_biopsias):
+    """
+    Agrega al libro la hoja "Biopsias" con la suma de Cantidad de cada
+    tipo de biopsia (Antro, Cuerpo, Ángulo, etc.) del periodo del
+    reporte.
+    """
+    return agregar_hoja_totales_tipo(
+        libro,
+        "Biopsias",
+        "Tipo de Biopsia",
+        totales_biopsias,
+    )
+
+
+def agregar_hoja_proc_adic(libro, totales_procedimientos_adicionales):
+    """
+    Agrega al libro la hoja "Proc Adic" con la suma de Cantidad de cada
+    procedimiento adicional (Sedación, Anestesia, APL, etc.) del
+    periodo del reporte.
+    """
+    return agregar_hoja_totales_tipo(
+        libro,
+        "Proc Adic",
+        "Procedimiento Adicional",
+        totales_procedimientos_adicionales,
+    )
+
+
+def crear_excel_registro(
+    filas,
+    nombre_hoja,
+    totales_procedimientos=None,
+    totales_biopsias=None,
+    totales_procedimientos_adicionales=None,
+):
+    """
+    Genera el Excel con el mismo orden de columnas del registro físico.
+    Firma siempre queda en blanco.
+
+    Si se pasa "totales_procedimientos" (dict {procedimiento: cantidad}),
+    se agrega una hoja "Totales por Procedimiento" con la suma de
+    Cantidad por cada procedimiento del periodo del reporte. Igual con
+    "totales_biopsias" (hoja "Biopsias") y
+    "totales_procedimientos_adicionales" (hoja "Proc Adic").
+    """
+    libro = Workbook()
+    hoja = libro.active
+    hoja.title = nombre_hoja[:31]
+
+    hoja.append(COLUMNAS_REPORTE)
+
+    relleno_encabezado = PatternFill(
+        "solid",
+        fgColor="35566B",
+    )
+    fuente_encabezado = Font(
+        color="FFFFFF",
+        bold=True,
+    )
+    borde_fino = Border(
+        left=Side(style="thin", color="7B8790"),
+        right=Side(style="thin", color="7B8790"),
+        top=Side(style="thin", color="7B8790"),
+        bottom=Side(style="thin", color="7B8790"),
+    )
+
+    for celda in hoja[1]:
+        celda.fill = relleno_encabezado
+        celda.font = fuente_encabezado
+        celda.alignment = Alignment(
+            horizontal="center",
+            vertical="center",
+            wrap_text=True,
+        )
+        celda.border = borde_fino
+
+    for fila in filas:
+        hoja.append([
+            fila.get(encabezado, "")
+            for encabezado in COLUMNAS_REPORTE
+        ])
+
+        numero_fila = hoja.max_row
+
+        for indice, celda in enumerate(
+            hoja[numero_fila],
+            start=1,
+        ):
+            celda.border = borde_fino
+            encabezado_columna = COLUMNAS_REPORTE[indice - 1]
+            celda.alignment = Alignment(
+                horizontal=(
+                    "left"
+                    if encabezado_columna in COLUMNAS_TEXTO_LARGO
+                    else "center"
+                ),
+                vertical="center",
+                wrap_text=True,
+            )
+
+        hoja.row_dimensions[numero_fila].height = 30
+
+    hoja.freeze_panes = "A2"
+
+    if hoja.max_row >= 2:
+        hoja.auto_filter.ref = (
+            f"A1:{get_column_letter(len(COLUMNAS_REPORTE))}"
+            f"{hoja.max_row}"
+        )
+
+    anchos = {
+        "Fecha": 13,
+        "Médico": 20,
+        "Enfermera": 20,
+        "Técnica": 20,
+        "Procedimiento": 18,
+        "Cantidad": 10,
+        "Equipos": 14,
+        "Otra biopsia": 22,
+        "Observaciones": 28,
+    }
+    ancho_columna_predeterminado = 12
+
+    for indice, encabezado in enumerate(
+        COLUMNAS_REPORTE,
+        start=1,
+    ):
+        hoja.column_dimensions[
+            get_column_letter(indice)
+        ].width = anchos.get(encabezado, ancho_columna_predeterminado)
+
+    hoja.row_dimensions[1].height = 45
+    hoja.sheet_view.showGridLines = False
+
+    # Para imprimirlo como un registro ancho, similar a la libreta.
+    hoja.page_setup.orientation = "landscape"
+    hoja.page_setup.fitToWidth = 1
+    hoja.page_setup.fitToHeight = 0
+
+    if totales_procedimientos:
+        agregar_hoja_totales_procedimiento(
+            libro,
+            totales_procedimientos,
+        )
+
+    if totales_biopsias:
+        agregar_hoja_biopsias(
+            libro,
+            totales_biopsias,
+        )
+
+    if totales_procedimientos_adicionales:
+        agregar_hoja_proc_adic(
+            libro,
+            totales_procedimientos_adicionales,
+        )
+
+    archivo = BytesIO()
+    libro.save(archivo)
+    archivo.seek(0)
+
+    return archivo.getvalue()
+
+
+def filas_para_vista_previa(filas):
+    """
+    Devuelve solo las columnas visibles en el orden del reporte.
+    """
+    return [
+        {
+            columna: fila.get(columna, "")
+            for columna in COLUMNAS_REPORTE
+        }
+        for fila in filas
+    ]
+
+
+# =========================================================
+# MENÚ LATERAL
+# =========================================================
+
+with st.sidebar:
+    st.markdown(
+        '<h2>Gastroenterologia </h2>',
+        unsafe_allow_html=True,
+    )
+
+    opcion_menu = st.radio(
+        "Menú",
+        [
+            "🏠 Formulario",
+            "📋 Reportes",
+            "📥 Indicadores",
+        ],
+        label_visibility="collapsed",
+    )
+
+    st.divider()
+
+    st.caption("Cuenta de Google")
+    st.info("Autorización al usar Google")
+    st.caption("✅ VERSIÓN APPS SCRIPT - 08/08/2026")
+
+    st.markdown(
+        """
+        <div class="acento-colores">
+            <i class="c-verde"></i>
+            <i class="c-azul"></i>
+            <i class="c-rojo"></i>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================================================
+# ESTILOS
+# =========================================================
+
+# =========================================================
+# FONDO HOSPITAL - SOLO ÁREA PRINCIPAL
+# =========================================================
+if FONDO_HOSPITAL_BASE64:
+    st.markdown(
+        f"""
+        <style>
+        [data-testid="stMain"] {{
+            background-color: #AEBCC6 !important;
+            background-image:
+                linear-gradient(
+                    rgba(174, 188, 198, 0.66),
+                    rgba(142, 160, 172, 0.66)
+                ),
+                url("data:image/png;base64,{FONDO_HOSPITAL_BASE64}") !important;
+
+            background-position: center center !important;
+            background-size: cover !important;
+            background-repeat: no-repeat !important;
+            background-attachment: scroll !important;
+            min-height: 100vh !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    """
+    <style>
+    @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Press+Start+2P&display=swap");
+
+
+    /* =========================================================
+       FONDO DEL ÁREA PRINCIPAL
+       ========================================================= */
+
+    .stApp,
+    [data-testid="stAppViewContainer"] {
+        background: linear-gradient(
+            180deg,
+            #C06A7D 0%,
+            #AF596E 100%
+        ) !important;
+    }
+
+        /* =========================================================
+       MENÚ LATERAL
+       ========================================================= */
+
+    [data-testid="stSidebar"] {
+        background: linear-gradient(
+            to right,
+            #FFFFFF 0%,
+            #FFFFFF 70%,
+            #C5D0D6 100%
+        ) !important;
+        border-right: none !important;
+        box-shadow: none !important;
+        z-index: 20 !important;
+        overflow: visible !important;
+    }
+
+    [data-testid="stAppViewContainer"] {
+        overflow: visible !important;
+    }
+
+    [data-testid="stSidebar"] > div:first-child {
+        background: linear-gradient(
+            to right,
+            #FFFFFF 0%,
+            #FFFFFF 70%,
+            #C5D0D6 100%
+        ) !important;
+        overflow: visible !important;
+        box-shadow: none !important;
+    }
+
+    [data-testid="stSidebarContent"] {
+        background: linear-gradient(
+            to right,
+            #FFFFFF 0%,
+            #FFFFFF 70%,
+            #C5D0D6 100%
+        ) !important;
+        box-shadow: none !important;
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] {
+        background: transparent !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stAlert"] {
+        background: #F3F6F8 !important;
+        border: 1.5px solid #D5DEE4 !important;
+        border-radius: 9px !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stAlert"] p {
+        color: #2F4A5A !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p,
+    [data-testid="stSidebar"] .stCaption p {
+        color: #5A7382 !important;
+    }
+
+    /* =========================================================
+       CAJAS PRINCIPALES
+       ========================================================= */
+
+    .st-key-caja_conexion,
+    .st-key-caja_excel {
+        background: rgba(54, 78, 96, 0.30) !important;
+        border: 1.5px solid #7F9EAF !important;
+        border-radius: 19px !important;
+        padding: 1.35rem 1.50rem 1.25rem 1.50rem !important;
+
+        box-shadow:
+            0 5px 14px rgba(25, 43, 55, 0.20),
+            inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+    }
+
+    .st-key-caja_conexion\:hover,
+    .st-key-caja_excel\:hover {
+        border-color: #8EADBE !important;
+
+        box-shadow:
+            0 7px 17px rgba(25, 43, 55, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.10) !important;
+    }
+
+
+    /* =========================================================
+       TÍTULO PRINCIPAL
+       ========================================================= */
+
+    .titulo-principal {
+        color: #3A3F44 !important;
+        font-size: 31px !important;
+        font-weight: 800 !important;
+        line-height: 1.20 !important;
+        letter-spacing: 0.20px !important;
+
+        padding-bottom: 7px !important;
+        margin-top: -2px !important;
+        margin-bottom: 3px !important;
+
+        display: inline-block !important;
+        width: fit-content !important;
+        max-width: none !important;
+
+        border-bottom: 1.5px solid rgba(225, 236, 242, 0.65) !important;
+        text-shadow:
+            0 0 6px rgba(255, 255, 255, 0.55),
+            0 0 14px rgba(255, 255, 255, 0.30),
+            0 1px 2px rgba(0, 0, 0, 0.20) !important;
+    }
+
+    .subtitulo-principal,
+    .subtitulo-principal p {
+        color: #FFFFFF !important;
+        font-size: 22px !important;
+        font-weight: 600 !important;
+        line-height: 1.45 !important;
+        letter-spacing: 0.20px !important;
+        margin: 0 !important;
+
+        text-shadow:
+            0 2px 4px rgba(0, 0, 0, 0.85),
+            0 0 8px rgba(0, 0, 0, 0.40),
+            0 0 14px rgba(0, 0, 0, 0.22) !important;
+    }
+
+    /* =========================================================
+       TÍTULOS DE LAS CAJAS
+       ========================================================= */
+
+    .st-key-caja_conexion h3,
+    .st-key-caja_excel h3 {
+        color: #3A3F44 !important;
+        font-size: 25px !important;
+        font-weight: 750 !important;
+        letter-spacing: 0.15px !important;
+        margin-bottom: 5px !important;
+        text-shadow:
+            0 0 5px rgba(255, 255, 255, 0.45),
+            0 1px 2px rgba(0, 0, 0, 0.18) !important;
+    }
+
+    .st-key-caja_conexion [data-testid="stCaptionContainer"],
+    .st-key-caja_excel [data-testid="stCaptionContainer"] {
+        color: #003C84 !important;
+        font-size: 16px !important;
+        font-weight: 650 !important;
+        line-height: 1.45 !important;
+        text-shadow:
+            0 0 5px rgba(255, 255, 255, 0.65),
+            0 0 10px rgba(255, 255, 255, 0.40) !important;
+    }
+
+
+    /* =========================================================
+       ETIQUETAS Y CAMPOS
+       ========================================================= */
+
+    [data-testid="stMain"] label,
+    [data-testid="stMain"] label p,
+    [data-testid="stMain"] label span,
+    [data-testid="stMain"] [data-testid="stMetricLabel"],
+    [data-testid="stMain"] [data-testid="stMetricLabel"] p,
+    [data-testid="stMain"] [data-testid="stMetricLabel"] span {
+        color: #003C84 !important;
+        font-weight: 650 !important;
+        font-size: 22px !important;
+        text-shadow:
+            0 0 5px rgba(255, 255, 255, 0.65),
+            0 0 10px rgba(255, 255, 255, 0.40) !important;
+    }
+
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        background: rgba(54, 78, 96, 0.22) !important;
+        border: 1.5px solid #7F9EAF !important;
+        border-radius: 14px !important;
+        box-shadow: 0 3px 9px rgba(25, 43, 55, 0.14) !important;
+    }
+
+    /* Caja del gráfico "Atenciones diarias del mes": mismo fondo
+       oscuro que usa Altair, para que el título (que ya no es parte
+       del gráfico sino un texto de Streamlit aparte) quede visualmente
+       dentro del cuadro y su espaciado se controle con CSS normal. */
+    .st-key-caja_grafico_mensual {
+        background-color: #0E1117 !important;
+        border-radius: 4px !important;
+        padding: 2px 18px 22px 18px !important;
+    }
+
+    .titulo-grafico-mensual {
+        color: #F1F5F7 !important;
+        font-size: 18px !important;
+        font-weight: bold !important;
+        margin-top: 4px !important;
+        margin-bottom: 0 !important;
+        text-align: left !important;
+    }
+
+    [data-testid="stVerticalBlockBorderWrapper"] p {
+        color: #003C84 !important;
+        font-weight: 650 !important;
+        text-shadow:
+            0 0 5px rgba(255, 255, 255, 0.65),
+            0 0 10px rgba(255, 255, 255, 0.40) !important;
+    }
+
+
+    /* =========================================================
+       BOTONES
+       ========================================================= */
+
+    div.stButton > button {
+        background: #A8BDC9 !important;
+        color: #182E3D !important;
+        border: 1.5px solid #3F7298 !important;
+        border-radius: 14px !important;
+        font-weight: 500 !important;
+        box-shadow: 0 2px 5px rgba(25, 43, 55, 0.15) !important;
+    }
+
+    div.stButton > button\:hover {
+        background: #97AFBD !important;
+        color: #102531 !important;
+        border-color: #2F6389 !important;
+        box-shadow: 0 4px 8px rgba(25, 43, 55, 0.22) !important;
+    }
+
+
+    /* =========================================================
+       CARGADOR DE ARCHIVO EXCEL
+       ========================================================= */
+
+    [data-testid="stFileUploaderDropzone"] {
+        background: #55778A !important;
+        border: 1.5px solid #506F82 !important;
+    }
+
+    [data-testid="stFileUploaderDropzone"] span,
+    [data-testid="stFileUploaderDropzone"] small {
+        color: #182E3D !important;
+    }
+
+    [data-testid="stFileUploaderDropzone"] button {
+        background: #A8BDC9 !important;
+        color: #182E3D !important;
+        border: 1.5px solid #3F7298 !important;
+        border-radius: 14px !important;
+        font-weight: 500 !important;
+        box-shadow: 0 2px 5px rgba(25, 43, 55, 0.15) !important;
+    }
+
+    [data-testid="stFileUploaderDropzone"] button\:hover {
+        background: #97AFBD !important;
+        color: #102531 !important;
+        border-color: #2F6389 !important;
+        box-shadow: 0 4px 8px rgba(25, 43, 55, 0.22) !important;
+    }
+
+
+    /* =========================================================
+       TEXTO Y ESPACIADO GENERAL
+       ========================================================= */
+
+    [data-testid="stMain"] {
+        color: #EDF2F5 !important;
+    }
+
+    /* Spinner - texto de conexión con Google */
+    [data-testid="stSpinner"] p {
+        font-size: 19px !important;
+        font-weight: 600 !important;
+        color: #F4F7F9 !important;
+
+        text-shadow:
+            0 2px 3px rgba(0, 0, 0, 0.65),
+            0 0 8px rgba(0, 0, 0, 0.25) !important;
+    }
+
+    [data-testid="stSpinner"] {
+        transform: translateY(-6px) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 100% !important;
+    }
+
+    /* Ocultar el circulito original de Streamlit */
+    [data-testid="stSpinner"] svg {
+        display: none !important;
+    }
+
+    /* Tres barras verdes en movimiento */
+    [data-testid="stSpinner"]::before {
+        content: "" !important;
+        width: 30px !important;
+        height: 24px !important;
+        margin-right: 12px !important;
+        flex-shrink: 0 !important;
+
+        background:
+            linear-gradient(#58D68D 0 0) left bottom / 6px 45% no-repeat,
+            linear-gradient(#58D68D 0 0) center bottom / 6px 90% no-repeat,
+            linear-gradient(#58D68D 0 0) right bottom / 6px 60% no-repeat !important;
+
+        transform-origin: center bottom !important;
+        animation: barras-cargando 0.55s ease-in-out infinite alternate !important;
+        filter: drop-shadow(0 0 4px rgba(88, 214, 141, 0.55)) !important;
+    }
+
+    @keyframes barras-cargando {
+        0% {
+            transform: scaleY(0.48);
+        }
+        100% {
+            transform: scaleY(1);
+        }
+    }
+
+    /* Subir barra de progreso de creación del formulario */
+    [data-testid="stProgress"] {
+        transform: translateY(-30px) !important;
+    }
+
+    /* Texto Creando formulario... */
+    [data-testid="stProgress"] p {
+        font-size: 19px !important;
+        font-weight: 600 !important;
+        color: #F4F7F9 !important;
+
+        text-shadow:
+            0 2px 3px rgba(0, 0, 0, 0.65),
+            0 0 8px rgba(0, 0, 0, 0.25) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 1.2rem !important;
+    }
+
+    [data-testid="stMainBlockContainer"] {
+        padding-top: 0rem !important;
+    }
+
+    [data-testid="stHeader"] {
+        display: none !important;
+    }
+
+    [data-testid="stMain"] [data-testid="stAlert"] p {
+        color: #18303F !important;
+        font-weight: 500 !important;
+    }
+
+    [data-testid="stMain"] [data-testid="stAlert"] {
+        border: 1.5px solid #506F82 !important;
+        border-radius: 10px !important;
+        background: rgba(88, 214, 141, 0.28) !important;
+
+        /* Ocupa exactamente el ancho de la primera columna */
+        width: 100% !important;
+        max-width: 100% !important;
+
+        /* Queda alineada con el botón 1 */
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+
+        /* Altura */
+        padding: 0 !important;
+        height: 50px !important;
+        min-height: 50px !important;
+        max-height: 50px !important;
+        box-sizing: border-box !important;
+
+        display: flex !important;
+        align-items: center !important;
+
+        box-shadow:
+            0 8px 20px rgba(20, 45, 38, 0.30),
+            0 3px 7px rgba(0, 0, 0, 0.14),
+            inset 0 1px 0 rgba(255, 255, 255, 0.12) !important;
+
+        /* Separación uniforme respecto a los botones */
+        transform: translateY(-4px) !important;
+    }
+
+    /* Quitar padding interno de Streamlit */
+    [data-testid="stMain"] [data-testid="stAlert"] > div {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+        min-height: 0 !important;
+        height: 100% !important;
+
+        display: flex !important;
+        align-items: center !important;
+    }
+
+    /* Texto */
+    [data-testid="stMain"] [data-testid="stAlert"] p {
+        white-space: nowrap !important;
+        margin: 0 !important;
+        line-height: 1.1 !important;
+    }
+
+    /* Asegura el centrado vertical del ícono + texto dentro de la alerta */
+    [data-testid="stMain"] [data-testid="stAlert"] [data-testid="stMarkdownContainer"] {
+        display: flex !important;
+        align-items: center !important;
+        height: 100% !important;
+        margin-top: -16px !important;
+    }
+
+    [data-testid="stMain"] [data-testid="stAlert"] > div,
+    [data-testid="stMain"] [data-testid="stAlert"] > div > div,
+    [data-testid="stMain"] [data-testid="stAlert"] > div > div > div {
+        display: flex !important;
+        align-items: center !important;
+        height: 100% !important;
+    }
+
+    /* Reduce el espacio alrededor de las líneas divisoras (---) del formulario */
+    [data-testid="stMain"] hr {
+        margin-top: 10px !important;
+        margin-bottom: 10px !important;
+    }
+
+    /* Tamaño de todos los títulos principales */
+    [data-testid="stMain"] h1 {
+        font-size: 32px !important;
+        line-height: 1.15 !important;
+        margin-bottom: 12px !important;
+    }
+
+    /* Sombra en títulos, subtítulos y métricas del área principal:
+       sin esto, el texto claro se pierde contra las zonas más
+       claras de la foto de fondo. */
+    [data-testid="stMain"] h1,
+    [data-testid="stMain"] h2,
+    [data-testid="stMain"] h3,
+    [data-testid="stMain"] [data-testid="stMetricLabel"],
+    [data-testid="stMain"] [data-testid="stMetricValue"] {
+        text-shadow:
+            0 2px 4px rgba(0, 0, 0, 0.85),
+            0 0 8px rgba(0, 0, 0, 0.40),
+            0 0 14px rgba(0, 0, 0, 0.22) !important;
+    }
+
+    .descripcion-seccion {
+        color: #F4E3B2 !important;
+        font-size: 20px !important;
+        font-weight: 600 !important;
+        line-height: 1.45 !important;
+        margin-top: -18px !important;
+        margin-bottom: 20px !important;
+        text-shadow: 0 1px 2px rgba(25, 43, 55, 0.30) !important;
+    }
+
+    /* =========================================================
+    CAMPOS DE LA PLANTILLA
+    ========================================================= */
+
+    .campo-etiqueta {
+        color: #F1F5F7 !important;
+        font-size: 17px !important;
+        font-weight: 600 !important;
+        line-height: 1.2 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+
+        /* Sube ligeramente el texto */
+        transform: translateY(-11px) !important;
+        white-space: nowrap !important;
+    }
+
+    .campo-obligatorio {
+        color: #FFD18A !important;
+        font-size: 19px !important;
+        font-weight: 800 !important;
+        margin-left: 3px !important;
+    }
+
+    .leyenda-obligatorio {
+        color: #E9EEF1 !important;
+        font-size: 14px !important;
+        margin-top: 10px !important;
+        margin-bottom: 4px !important;
+    }
+
+
+
+    /* =========================================================
+       AJUSTES MÍNIMOS SOLICITADOS
+       - Mantiene el fondo general sin cambios.
+       - Aumenta solo el texto de las opciones del menú lateral.
+       - Aclara ligeramente solo las cajas de la plantilla.
+       ========================================================= */
+
+    /* Texto de las opciones del menú lateral */
+    [data-testid="stSidebar"] [role="radiogroup"] label p,
+    [data-testid="stSidebar"] [role="radiogroup"] label span {
+        font-size: 17px !important;
+        font-weight: 700 !important;
+        line-height: 1.35 !important;
+        color: #003C84 !important;
+    }
+
+    /* Separación entre INDICE y la lista del menú */
+
+        /* Texto de las opciones del menú lateral */
+    [data-testid="stSidebar"] [role="radiogroup"] label p,
+    [data-testid="stSidebar"] [role="radiogroup"] label span {
+        font-size: 17px !important;
+        font-weight: 700 !important;
+        line-height: 1.35 !important;
+        color: #003C84 !important;
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] label {
+        border-radius: 9px !important;
+        padding: 4px 6px 4px 4px !important;
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+        background: #F3F6F8 !important;
+    }
+
+    [data-testid="stSidebar"] h2 {
+        margin-top: 1.5rem !important;
+        margin-bottom: 0.30rem !important;
+        color: #3A3F44 !important;
+        font-family: "Press Start 2P", "Courier New", monospace !important;
+        font-size: 14px !important;
+        font-weight: 400 !important;
+        letter-spacing: 0.15px !important;
+        line-height: 1.35 !important;
+        text-shadow:
+            0 2px 3px rgba(0, 0, 0, 0.45),
+            0 0 3px rgba(255, 255, 255, 0.08) !important;
+        text-decoration: none !important;
+        border-bottom: none !important;
+        box-shadow: none !important;
+        display: inline-block !important;
+        position: relative !important;
+        padding-left: 0.55rem !important;
+    }
+
+    [data-testid="stSidebar"] .indice-icono {
+        font-size: 22px !important;
+        vertical-align: middle !important;
+        margin-right: -2px !important;
+    }
+
+    [data-testid="stSidebar"] h2::after {
+        content: "" !important;
+        position: absolute !important;
+        left: 0.55rem !important;
+        bottom: -4px !important;
+        width: calc(100% - 0.55rem) !important;
+        height: 1px !important;
+        background: #9AADB8 !important;
+        border-radius: 999px !important;
+        opacity: 0.85 !important;
+        box-shadow:
+            0 1px 0 rgba(255, 255, 255, 0.70),
+            0 1px 2px rgba(47, 74, 90, 0.18) !important;
+    }
+
+    [data-testid="stSidebar"] hr {
+        border: none !important;
+        border-top: 1px solid #9AADB8 !important;
+        opacity: 0.80 !important;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.70) !important;
+    }
+
+    [data-testid="stSidebar"] .acento-colores {
+    width: auto !important;
+    height: auto !important;
+    margin: 70px auto 16px auto !important;
+    border: none !important;
+    background: none !important;
+    box-shadow: none !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px !important;
+}
+
+    [data-testid="stSidebar"] .acento-colores i {
+        display: block !important;
+        width: 6px !important;
+        height: 6px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        flex: 0 0 auto !important;
+        border-radius: 50% !important;
+        border: none !important;
+    }
+
+    [data-testid="stSidebar"] .c-verde {
+    animation: color-1 3.2s linear infinite !important;
+    }
+
+    [data-testid="stSidebar"] .c-azul {
+        animation: color-2 3.2s linear infinite !important;
+    }
+
+    [data-testid="stSidebar"] .c-rojo {
+        animation: color-3 3.2s linear infinite !important;
+    }
+
+    @keyframes color-1 {
+        0%, 100% { background-color: #27AE60; }
+        25%      { background-color: #2E86C1; }
+        50%      { background-color: #E74C3C; }
+        75%      { background-color: #F1C40F; }
+    }
+
+    @keyframes color-2 {
+        0%, 100% { background-color: #2E86C1; }
+        25%      { background-color: #E74C3C; }
+        50%      { background-color: #F1C40F; }
+        75%      { background-color: #27AE60; }
+    }
+
+    @keyframes color-3 {
+        0%, 100% { background-color: #E74C3C; }
+        25%      { background-color: #F1C40F; }
+        50%      { background-color: #27AE60; }
+        75%      { background-color: #2E86C1; }
+    }
+
+    [data-testid="stSidebar"] [role="radiogroup"] {
+        margin-top: 2.05rem !important;
+    }
+
+    /* =========================================================
+       TARJETA INICIAL DEL FORMULARIO
+       ========================================================= */
+    .st-key-tarjeta_inicio_formulario {
+        position: relative !important;
+        background: rgba(54, 78, 96, 0.28) !important;
+        border: 1.8px solid #000000 !important;
+        border-radius: 22px !important;
+        padding: 2.05rem 2.20rem 2.05rem 2.20rem !important;
+        margin-top: 1.2rem !important;
+        min-height: 230px !important;
+        overflow: hidden !important;
+        isolation: isolate !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+
+
+        box-shadow:
+            0 8px 22px rgba(0, 0, 0, 0.18),
+            inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+    }
+
+    /* =========================================================
+       DOS LUCES CORTAS QUE RECORREN EL BORDE REAL
+       ========================================================= */
+
+    .st-key-tarjeta_inicio_formulario::before,
+    .st-key-tarjeta_inicio_formulario::after {
+        content: "" !important;
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+
+        /* Segmento corto de luz */
+        width: 9px !important;
+        height: 2.5px !important;
+        border-radius: 999px !important;
+
+        background: linear-gradient(
+            90deg,
+            transparent 0%,
+            rgba(205, 229, 56, 0.18) 12%,
+            #CDE538 34%,
+            #F1FF79 50%,
+            #CDE538 66%,
+            rgba(205, 229, 56, 0.18) 88%,
+            transparent 100%
+        ) !important;
+
+        box-shadow:
+            0 0 2px rgba(205, 229, 56, 0.45),
+            0 0 4px rgba(205, 229, 56, 0.20) !important;
+
+        /* La trayectoria es exactamente el perímetro de la tarjeta */
+        offset-path: inset(1px round 20px) !important;
+        offset-anchor: 50% 50% !important;
+        offset-rotate: auto !important;
+
+        pointer-events: none !important;
+        z-index: 6 !important;
+        will-change: offset-distance !important;
+    }
+
+    .st-key-tarjeta_inicio_formulario [data-testid="stVerticalBlock"],
+    .st-key-tarjeta_inicio_formulario [data-testid="stVerticalBlockBorderWrapper"],
+    .st-key-tarjeta_inicio_formulario [data-testid="element-container"] {
+        height: auto !important;
+        min-height: 0 !important;
+        flex: 0 1 auto !important;
+    }
+
+    .st-key-tarjeta_inicio_formulario::before {
+        animation: luz_borde_horaria 8.5s linear infinite !important;
+    }
+
+    .st-key-tarjeta_inicio_formulario::after {
+        animation: luz_borde_antihoraria 8.5s linear infinite !important;
+    }
+
+    @keyframes luz_borde_horaria {
+        from {
+            offset-distance: 0%;
+        }
+        to {
+            offset-distance: 100%;
+        }
+    }
+
+    @keyframes luz_borde_antihoraria {
+        from {
+            offset-distance: 50%;
+        }
+        to {
+            offset-distance: -50%;
+        }
+    }
+
+    .inicio-titulo {
+        color: #3A3F44 !important;
+        font-family: "Press Start 2P", "Courier New", monospace !important;
+        font-size: 18px !important;
+        font-weight: 400 !important;
+        line-height: 1.55 !important;
+        letter-spacing: 0.25px !important;
+        text-align: center !important;
+
+        margin: 2px auto 12px auto !important;
+        width: max-content !important;
+
+       text-shadow:
+            0 0 5px rgba(255, 255, 255, 0.65),
+            0 0 12px rgba(255, 255, 255, 0.40) !important;
+
+        text-decoration: none !important;
+        border-bottom: none !important;
+        box-shadow: none !important;
+
+        position: relative !important;
+        padding-bottom: 10px !important;
+    }
+
+    .inicio-titulo::after {
+        content: "" !important;
+        position: absolute !important;
+        left: 0 !important;
+        bottom: 0 !important;
+        width: 100% !important;
+        height: 2px !important;
+        background: #CDE538 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        display: none !important;
+    }
+
+    .inicio-subtitulo {
+        color: #F3B562 !important;
+        font-family: "Press Start 2P", "Courier New", monospace !important;
+        font-size: 13px !important;
+        font-weight: 400 !important;
+        line-height: 1.6 !important;
+
+        letter-spacing: 0.20px !important;
+        text-align: center !important;
+        margin-bottom: 18px !important;
+        text-shadow: 0 2px 4px rgba(25, 43, 55, 0.24) !important;
+        text-decoration: none !important;
+        border-bottom: none !important;
+        box-shadow: none !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 10px !important;
+        width: 100% !important;
+    }
+
+    .inicio-subtitulo::before {
+        content: "" !important;
+        display: inline-block !important;
+        width: 4px !important;
+        height: 20px !important;
+        border-radius: 999px !important;
+        background: #CDE538 !important;
+        flex: 0 0 auto !important;
+    }
+
+    .inicio-descripcion {
+        color: #003C84 !important;
+        font-size: 18px !important;
+        font-weight: 700 !important;
+        line-height: 1.45 !important;
+        letter-spacing: 0.10px !important;
+        text-align: center !important;
+        margin-bottom: 38px !important;
+
+        text-shadow:
+            0 0 5px rgba(255, 255, 255, 0.65),
+            0 0 10px rgba(255, 255, 255, 0.40) !important;
+    }
+
+    .inicio-estado-formulario {
+        width: fit-content !important;
+        margin: -12px auto 18px auto !important;
+        padding: 6px 14px !important;
+
+        color: #FFF59A !important;
+        background: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+
+        font-size: 17px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.15px !important;
+        text-align: center !important;
+
+        text-shadow:
+            0 2px 4px rgba(0, 0, 0, 0.62),
+            0 0 5px rgba(0, 0, 0, 0.22) !important;
+
+    }
+
+    .inicio-icono {
+        text-align: center !important;
+        font-size: 46px !important;
+        line-height: 1 !important;
+        margin-bottom: 4px !important;
+    }
+
+    /* Logo principal: más grande y sin marco visual adicional */
+    .st-key-tarjeta_inicio_formulario [data-testid="stImage"] img {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        margin-top: 0 !important;
+    }
+
+    /* =========================================================
+       FLUJO PRINCIPAL DE 3 PASOS
+       ========================================================= */
+
+    .st-key-flujo_paso_1 div.stButton > button,
+    .st-key-flujo_paso_2 div.stButton > button,
+    .st-key-flujo_paso_3 div.stButton > button,
+    .st-key-flujo_paso_2 [data-testid="stLinkButton"] a,
+    .st-key-flujo_paso_3 [data-testid="stLinkButton"] a {
+        width: 100% !important;
+        min-height: 52px !important;
+        height: 52px !important;
+        padding: 0.48rem 0.70rem !important;
+
+        background: linear-gradient(
+            180deg,
+            #CC7488 0%,
+            #BC6579 100%
+        ) !important;
+
+        color: #FFFFFF !important;
+
+        border: 1.5px solid #733547 !important;
+
+        border-radius: 13px !important;
+
+        font-family: "Orbitron", "Segoe UI", sans-serif !important;
+        font-size: 14px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.45px !important;
+
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        white-space: nowrap !important;
+
+        box-shadow:
+            0 5px 12px rgba(25, 43, 55, 0.30),
+            0 2px 5px rgba(0, 0, 0, 0.15) !important;
+    }
+
+    .st-key-flujo_paso_1 div.stButton > button:hover,
+    .st-key-flujo_paso_2 [data-testid="stLinkButton"] a:hover,
+    .st-key-flujo_paso_3 [data-testid="stLinkButton"] a:hover {
+
+        background: linear-gradient(
+            180deg,
+            #B95A72 0%,
+            #A44761 100%
+        ) !important;
+
+        border-color: #7D3147 !important;
+
+        box-shadow:
+            0 0 10px rgba(164,71,97,0.30),
+            0 6px 14px rgba(20,35,45,0.20) !important;
+    }
+
+    .st-key-flujo_paso_1 div.stButton > button p,
+    .st-key-flujo_paso_1 div.stButton > button span,
+    .st-key-flujo_paso_2 div.stButton > button p,
+    .st-key-flujo_paso_2 div.stButton > button span,
+    .st-key-flujo_paso_3 div.stButton > button p,
+    .st-key-flujo_paso_3 div.stButton > button span,
+    .st-key-flujo_paso_2 [data-testid="stLinkButton"] a p,
+    .st-key-flujo_paso_2 [data-testid="stLinkButton"] a span,
+    .st-key-flujo_paso_3 [data-testid="stLinkButton"] a p,
+    .st-key-flujo_paso_3 [data-testid="stLinkButton"] a span {
+        color: #F2F5F7 !important;
+        font-family: "Orbitron", "Segoe UI", sans-serif !important;
+        font-size: 14px !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.45px !important;
+        margin: 0 !important;
+    }
+
+    .st-key-flujo_paso_1 div.stButton > button:disabled,
+    .st-key-flujo_paso_2 div.stButton > button:disabled,
+    .st-key-flujo_paso_3 div.stButton > button:disabled {
+
+        background: linear-gradient(
+            180deg,
+            rgba(197,109,128,0.65) 0%,
+            rgba(181,93,113,0.65) 100%
+        ) !important;
+
+        color: rgba(255,255,255,0.90) !important;
+
+        border: none !important;
+
+        box-shadow:
+            0 5px 12px rgba(25,43,55,0.18),
+            0 2px 5px rgba(0,0,0,0.08) !important;
+
+        cursor: not-allowed !important;
+    }
+
+    /* Al pasar el mouse por botones desactivados */
+        .st-key-flujo_paso_1 div.stButton > button:disabled:hover,
+        .st-key-flujo_paso_2 div.stButton > button:disabled:hover,
+        .st-key-flujo_paso_3 div.stButton > button:disabled:hover {
+            border-color: #66727A !important;
+        }
+
+    /* =========================================================
+       INDICADOR VISUAL DEL PASO 2
+       ========================================================= */
+
+    .indicador-paso-2 {
+        width: 100% !important;
+        min-height: 58px !important;
+
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+
+        text-align: center !important;
+        margin: 0 !important;
+        padding: 0 !important;
+
+        /* Centrado debajo del segundo botón */
+        transform: translateY(-9px) !important;
+    }
+
+    .triangulo-paso-2 {
+        color: #FF8C00 !important;
+        font-size: 36px !important;
+        line-height: 0.78 !important;
+        font-weight: 900 !important;
+
+        margin: 0 !important;
+        padding: 0 !important;
+
+        text-shadow:
+            0 0 5px rgba(255, 140, 0, 0.95),
+            0 0 11px rgba(255, 140, 0, 0.62),
+            0 3px 4px rgba(0, 0, 0, 0.35) !important;
+
+        filter: drop-shadow(0 0 4px rgba(255, 140, 0, 0.45)) !important;
+        animation: paso2-indicador 0.72s ease-in-out infinite alternate !important;
+    }
+
+    .texto-paso-2 {
+        color: #FFD18A !important;
+        font-family: "Orbitron", "Segoe UI", sans-serif !important;
+        font-size: 12px !important;
+        font-weight: 700 !important;
+        letter-spacing: 1.25px !important;
+
+        margin-top: 7px !important;
+        line-height: 1 !important;
+
+        text-shadow:
+            0 2px 3px rgba(0, 0, 0, 0.60),
+            0 0 6px rgba(255, 140, 0, 0.22) !important;
+    }
+
+    @keyframes paso2-indicador {
+        from {
+            transform: translateY(4px) scale(1);
+        }
+        to {
+            transform: translateY(-4px) scale(1.06);
+        }
+    }
+
+    .footer-informatica {
+    position: fixed !important;
+    bottom: 18px !important;
+    left: calc(50% + 10.5rem) !important;
+    transform: translateX(-50%) !important;
+
+    color: rgba(230,230,230,0.95) !important;
+    font-size: 15px !important;      /* más grande */
+    font-weight: 600 !important;
+    letter-spacing: 0.6px !important;
+
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+
+    text-shadow:
+        0 0 3px rgba(0,0,0,1),
+        0 0 6px rgba(0,0,0,0.95),
+        0 0 12px rgba(0,0,0,0.90),
+        2px 2px 4px rgba(0,0,0,0.90) !important;
+}
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+        """
+        <div class="acento-colores"></div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown(
+    """
+    <div class="footer-informatica">
+        OGEI - Hospital San Juan de Matucana
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown("""
+<style>
+.block-container{
+    padding-top: 0rem !important;
+}
+[data-testid="stMainBlockContainer"] {
+    padding-top: 0rem !important;
+}
+[data-testid="stMain"] h1 {
+    margin-top: 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# CONTENIDO SEGÚN EL MENÚ
+# =========================================================
+
+if opcion_menu == "🏠 Formulario":
+
+    formulario_hoy = None
+    error_consulta_formulario_hoy = None
+
+    fecha_hoy_sesion = datetime.now(
+        ZoneInfo("America/Lima")
+    ).strftime("%Y-%m-%d")
+
+    try:
+        formulario_hoy = obtener_formulario_hoy()
+
+        if formulario_hoy:
+            cargar_formulario_hoy_en_sesion(formulario_hoy)
+        else:
+            # Si cambió el día, no se debe seguir usando la hoja anterior.
+            st.session_state.pop("form_id", None)
+            st.session_state.pop("form_url", None)
+            st.session_state.pop("form_fecha_activa", None)
+
+    except (requests.exceptions.RequestException, ValueError) as error:
+        error_consulta_formulario_hoy = error
+
+        # Si no podemos verificar el backend, solo conservamos una hoja
+        # que sepamos que pertenece al día actual.
+        if st.session_state.get("form_fecha_activa") != fecha_hoy_sesion:
+            st.session_state.pop("form_id", None)
+            st.session_state.pop("form_url", None)
+            st.session_state.pop("form_fecha_activa", None)
+
+    # =========================================================
+    # TARJETA INICIAL
+    # =========================================================
+
+
+    logo_esquina_izq_b64 = obtener_imagen_base64(RUTA_LOGO_DERECHA)
+    logo_esquina_der_b64 = obtener_imagen_base64(RUTA_LOGO_IZQUIERDA)
+
+    st.markdown(
+        f"""
+        <style>
+        .logo-esquina {{
+            position: fixed !important;
+            top: 14px !important;
+            z-index: 15 !important;
+            pointer-events: none !important;
+        }}
+
+        .logo-esquina img {{
+            width: 100px !important;
+            height: auto !important;
+            display: block !important;
+            filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.25));
+        }}
+
+        .logo-esquina-izquierda {{
+            left: calc(21rem + 16px) !important;
+        }}
+
+        .logo-esquina-derecha {{
+            right: 40px !important;
+        }}
+
+        </style>
+
+        <div class="logo-esquina logo-esquina-izquierda">
+            <img src="data:image/png;base64,{logo_esquina_izq_b64}" />
+        </div>
+        <div class="logo-esquina logo-esquina-derecha">
+            <img src="data:image/png;base64,{logo_esquina_der_b64}" />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    margen_izq, columna_tarjeta, margen_der = st.columns(
+        [1, 7.2, 1]
+    )
+
+    with columna_tarjeta:
+
+
+
+        with st.container(
+                            border=True,
+                            key="tarjeta_inicio_formulario",
+                        ):
+
+            if RUTA_LOGO.exists():
+                logo_transparente = obtener_logo_transparente(RUTA_LOGO)
+
+                logo_izq, logo_centro, logo_der = st.columns(
+                    [4.15, 1.70, 4.15]
+                )
+
+                with logo_centro:
+                    st.image(
+                        logo_transparente,
+                        width=125,
+                    )
+            else:
+                st.markdown(
+                    '<div class="inicio-icono">🩺</div>',
+                    unsafe_allow_html=True,
+                )
+
+            fecha_estado = datetime.now(
+                ZoneInfo("America/Lima")
+            ).strftime("%d/%m/%Y")
+
+            estado_formulario = ""
+
+            if formulario_hoy:
+                estado_formulario = (
+                    f'<div class="inicio-estado-formulario">'
+                    f'✓ Formulario diario activo · {fecha_estado}'
+                    f'</div>'
+                )
+
+            st.markdown(
+                f"""
+                <div class="inicio-titulo">
+                    Registro de Biopsias
+                </div>
+
+                <div class="inicio-descripcion">
+                    Gestión de formularios, reportes e indicadores de biopsias.
+                </div>
+
+                {estado_formulario}
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # Flujo principal: los pasos quedan en una sola fila
+    # con el mismo ancho de la tarjeta principal.
+    flujo_margen_izq, columna_flujo, flujo_margen_der = st.columns(
+        [1.4, 7.2, 1.4]
+    )
+
+    with columna_flujo:
+        col_paso1, col_paso3 = st.columns(2)
+
+        with col_paso1:
+            with st.container(key="flujo_paso_1"):
+                if formulario_hoy:
+                    boton_iniciar_formulario = st.button(
+                        "✓  1. Formulario de hoy",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=True,
+                        key="boton_crear_formulario",
+                    )
+                else:
+                    boton_iniciar_formulario = st.button(
+                        "▶  1. Crear formulario",
+                        type="primary",
+                        use_container_width=True,
+                        disabled=(error_consulta_formulario_hoy is not None),
+                        key="boton_crear_formulario",
+                    )
+
+    if error_consulta_formulario_hoy is not None:
+        st.warning(
+            "No se pudo verificar si ya existe el formulario de hoy. "
+            "Por seguridad, la creación queda temporalmente deshabilitada."
+        )
+
+    # =========================================================
+    # CREAR LA HOJA DE REGISTRO DESDE EL BOTÓN DE LA TARJETA
+    # (antes: creaba un Google Form)
+    # =========================================================
+
+    if boton_iniciar_formulario:
+        try:
+
+            # Segunda verificación justo antes de crear. Evita duplicados
+            # si otra PC creó la hoja mientras esta pantalla estaba abierta.
+            formulario_existente = obtener_formulario_hoy()
+
+            if formulario_existente:
+                cargar_formulario_hoy_en_sesion(
+                    formulario_existente
+                )
+                st.info(
+                    "La hoja de registro de hoy ya existe. Se utilizará esa misma hoja."
+                )
+                st.rerun()
+
+            progreso_formulario = st.progress(
+                10,
+                text="Creando hoja de registro..."
+            )
+
+            datos_formulario = crear_registro_del_dia(
+                progreso_formulario,
+            )
+
+            progreso_formulario.progress(
+                100,
+                text="Hoja de registro creada"
+            )
+
+            time.sleep(0.3)
+
+            progreso_formulario.empty()
+
+            # Al recargar, el bloque de arriba vuelve a llamar a
+            # obtener_formulario_hoy() y ya encuentra la hoja recién
+            # creada, así que carga el session_state por sí solo.
+            st.session_state["mostrar_exito_formulario"] = True
+            st.rerun()
+
+        except FileNotFoundError as error:
+            st.error(str(error))
+
+        except HttpError as error:
+            st.error(
+                    "Google rechazó una solicitud de su API."
+            )
+
+            detalle = str(error)
+
+            if getattr(error, "content", None):
+                    try:
+                        detalle = error.content.decode(
+                            "utf-8",
+                            errors="replace",
+                        )
+                    except Exception:
+                        pass
+
+            st.code(detalle)
+
+        except Exception as error:
+            st.error(
+                    "No se pudo crear la hoja de registro."
+            )
+            st.code(str(error))
+
+
+    # =========================================================
+    # PASO 3 DEL FLUJO PRINCIPAL (VER RESPUESTAS)
+    # =========================================================
+
+    if st.session_state.get("form_id"):
+
+        url_hoja = st.session_state.get("form_url", "")
+
+        with col_paso3:
+            with st.container(key="flujo_paso_3"):
+                if url_hoja:
+                    st.link_button(
+                        "3. Ver respuestas",
+                        url_hoja,
+                        use_container_width=True,
+                    )
+                else:
+                    st.button(
+                        "3. Ver respuestas",
+                        disabled=True,
+                        use_container_width=True,
+                        key="paso_ver_disabled",
+                    )
+
+    else:
+        with col_paso3:
+            with st.container(key="flujo_paso_3"):
+                st.button(
+                    "3. Ver respuestas",
+                    disabled=True,
+                    use_container_width=True,
+                    key="paso_ver_disabled",
+                )
+
+    # =========================================================
+    # FORMULARIO NATIVO DE REGISTRO (reemplaza al Google Form)
+    # =========================================================
+    # Antes, "2. Registrar respuesta" abría un Google Form aparte.
+    # Ahora el propio formulario vive acá, dentro de la app, y al
+    # guardar se envía directo a Apps Script (ver
+    # guardar_respuesta_apps_script), que agrega la fila a la hoja de
+    # registro de hoy (ver Code.gs).
+
+    if st.session_state.get("form_id"):
+
+        margen_izq_form, columna_form, margen_der_form = st.columns([1, 5, 1])
+        with columna_form:
+            st.markdown("#### 2. Registrar respuesta")
+            with st.form("formulario_registro_biopsia", clear_on_submit=True):
+                col_fecha, col_turno = st.columns(2)
+
+                with col_fecha:
+                    valor_fecha = st.date_input(
+                        "Fecha *",
+                        value=datetime.now(
+                            ZoneInfo("America/Lima")
+                        ).date(),
+                    )
+
+                with col_turno:
+                    valor_turno = st.multiselect(
+                        "Turno *",
+                        options=["Mañana", "Tarde", "Noche"],
+                    )
+
+                col_medico, col_enfermera, col_tecnica = st.columns(3)
+
+                with col_medico:
+                    valor_medico = st.text_input("Médico *")
+
+                with col_enfermera:
+                    valor_enfermera = st.text_input("Enfermera *")
+
+                with col_tecnica:
+                    valor_tecnica = st.text_input("Técnica *")
+
+                st.markdown("---")
+
+                col_procedimiento, col_otro_proc, col_cantidad = st.columns(3)
+
+                with col_procedimiento:
+                    valor_procedimiento = st.selectbox(
+                        "Procedimiento *",
+                        options=[""] + PROCEDIMIENTOS_BIOPSIA,
+                        format_func=lambda opcion: "Otro" if opcion == "Otros" else opcion,
+                    )
+
+                with col_otro_proc:
+                    valor_otro_procedimiento = st.text_input(
+                        "Si seleccionaste Otro",
+                        help='Completar solo si eligió "Otros" arriba.',
+                        key="otro_procedimiento",
+                    )
+
+                with col_cantidad:
+                    valor_cantidad = st.text_input(
+                        "Cantidad (Procedimiento) *",
+                        help="Cantidad del procedimiento seleccionado.",
+                    )
+
+                col_equipos, col_otro_equipo = st.columns(2)
+
+                with col_equipos:
+                    valor_equipos = st.selectbox(
+                        "Equipos",
+                        options=[""] + EQUIPOS_DISPONIBLES,
+                        format_func=lambda opcion: "Otro" if opcion == "Otros" else opcion,
+                    )
+
+                with col_otro_equipo:
+                    valor_otro_equipo = st.text_input(
+                        "Si seleccionaste Otro",
+                        help='Completar solo si eligió "Otros" arriba.',
+                        key="otro_equipo",
+                    )
+
+                st.markdown("---")
+                st.markdown(
+                    """
+                    <div style="
+                        color: #F1F5F7;
+                        font-size: 19px;
+                        font-weight: 600;
+                        margin-bottom: 10px;
+                        text-shadow:
+                            0 2px 4px rgba(0, 0, 0, 0.85),
+                            0 0 8px rgba(0, 0, 0, 0.40);
+                    ">
+                        Biopsias: Cantidad.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                cantidades_biopsia = {}
+                categorias_biopsia_grid = [
+                    categoria for categoria in CATEGORIAS_BIOPSIA if categoria != "Otros"
+                ]
+                columnas_biopsia = st.columns(4)
+                for indice, categoria in enumerate(categorias_biopsia_grid):
+                    with columnas_biopsia[indice % 4]:
+                        cantidades_biopsia[categoria] = st.text_input(
+                            categoria,
+                            key=f"cant_biopsia_{categoria}",
+                        )
+
+                col_otra_cantidad, col_otra_biopsia = st.columns(2)
+                with col_otra_cantidad:
+                    cantidades_biopsia["Otros"] = st.text_input(
+                        "Otra biopsia (Cantidad)",
+                        key="cant_biopsia_Otros",
+                    )
+                with col_otra_biopsia:
+                    valor_otra_biopsia = st.text_input(
+                        "Otra biopsia (Nombre)",
+                        help='Completar solo si puso una cantidad en "Otra biopsia (Cantidad)" arriba.',
+                    )
+
+                st.markdown("---")
+                st.markdown(
+                    """
+                    <div style="
+                        color: #F1F5F7;
+                        font-size: 19px;
+                        font-weight: 600;
+                        margin-bottom: 10px;
+                        text-shadow:
+                            0 2px 4px rgba(0, 0, 0, 0.85),
+                            0 0 8px rgba(0, 0, 0, 0.40);
+                    ">
+                        Procedimientos adicionales: Cantidad. 
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                cantidades_adicionales = {}
+                columnas_adicionales = st.columns(4)
+                for indice, tecnica in enumerate(PROCEDIMIENTOS_ADICIONALES):
+                    with columnas_adicionales[indice % 4]:
+                        cantidades_adicionales[tecnica] = st.text_input(
+                            tecnica,
+                            key=f"cant_adicional_{tecnica}",
+                        )
+
+                st.markdown("---")
+
+                valor_observaciones = st.text_area("Observaciones")
+
+                st.markdown(
+                    """
+                    <div class="leyenda-obligatorio">
+                        * Campo obligatorio. La columna Firma no se pide
+                        acá: queda en blanco para la firma física posterior.
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                enviado = st.form_submit_button(
+                    "Guardar registro",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+        if enviado:
+            faltantes = []
+            if not valor_turno:
+                faltantes.append("Turno")
+            if not valor_medico.strip():
+                faltantes.append("Médico")
+            if not valor_enfermera.strip():
+                faltantes.append("Enfermera")
+            if not valor_tecnica.strip():
+                faltantes.append("Técnica")
+            if not valor_procedimiento:
+                faltantes.append("Procedimiento")
+            if not valor_cantidad.strip():
+                faltantes.append("Cantidad")
+            elif not valor_cantidad.strip().isdigit():
+                faltantes.append("Cantidad (debe ser un número)")
+
+            if faltantes:
+                st.error(
+                    "Completa los campos obligatorios: "
+                    + ", ".join(faltantes)
+                )
+            else:
+                fila = {
+                    "Fecha": valor_fecha.strftime("%Y-%m-%d"),
+                    "Turno": ", ".join(valor_turno),
+                    "Médico": valor_medico.strip(),
+                    "Enfermera": valor_enfermera.strip(),
+                    "Técnica": valor_tecnica.strip(),
+                    "Procedimiento": valor_procedimiento,
+                    "Otro procedimiento": (
+                        valor_otro_procedimiento.strip()
+                        if valor_procedimiento == "Otros"
+                        else ""
+                    ),
+                    "Cantidad": valor_cantidad.strip(),
+                    "Equipos": valor_equipos,
+                    "Otro equipo": (
+                        valor_otro_equipo.strip()
+                        if valor_equipos == "Otros"
+                        else ""
+                    ),
+                    "Otra biopsia": valor_otra_biopsia.strip(),
+                    "Observaciones": valor_observaciones.strip(),
+                }
+
+                for categoria, cantidad in cantidades_biopsia.items():
+                    cantidad = cantidad.strip()
+                    if cantidad:
+                        fila[
+                            f"{PREFIJO_CANTIDAD_BIOPSIA}{categoria}"
+                        ] = cantidad
+
+                for tecnica, cantidad in cantidades_adicionales.items():
+                    cantidad = cantidad.strip()
+                    if cantidad:
+                        fila[
+                            f"{PREFIJO_CANTIDAD_ADICIONAL}{tecnica}"
+                        ] = cantidad
+
+                try:
+                    guardar_respuesta_apps_script(
+                        st.session_state["form_id"],
+                        fila,
+                    )
+                    st.success("**Registro guardado correctamente.**")
+                except Exception as error:
+                    st.error("No se pudo guardar el registro.")
+                    st.code(str(error))
+
+
+elif opcion_menu == "📋 Reportes":
+    st.title("📋 Reportes")
+
+    st.markdown(
+        """
+        <p class="descripcion-seccion">
+            Descarga el registro de biopsias por día o por mes.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    try:
+        formularios = listar_formularios_apps_script()
+
+        if not formularios:
+            st.info(
+                "Todavía no hay formularios guardados."
+            )
+
+        else:
+            tipo_reporte = st.radio(
+                "Tipo de reporte",
+                options=[
+                    "Por día",
+                    "Por mes",
+                ],
+                horizontal=True,
+                key="tipo_reporte_excel",
+            )
+
+            registros_filtrados = None
+
+            if tipo_reporte == "Por día":
+                indice_formulario = st.selectbox(
+                    "Seleccionar formulario",
+                    options=range(len(formularios)),
+                    format_func=lambda indice: (
+                        f"{formularios[indice].get('titulo', 'Formulario')} "
+                        f"— {formularios[indice].get('fecha_creacion', '')}"
+                    ),
+                    key="formulario_reporte_excel",
+                )
+
+                formulario = formularios[indice_formulario]
+                form_id = formulario["form_id_google"]
+
+                with st.spinner(
+                    "Consultando respuestas de Google Forms..."
+                ):
+                    registros = obtener_registros_formulario(
+                        form_id
+                    )
+
+                registros_con_fecha = [
+                    registro
+                    for registro in registros
+                    if registro.get("_fecha") is not None
+                ]
+
+                if not registros_con_fecha:
+                    st.info(
+                        "El formulario todavía no tiene respuestas "
+                        "con una fecha válida."
+                    )
+
+                else:
+                    fechas_disponibles = sorted(
+                        {
+                            registro["_fecha"]
+                            for registro in registros_con_fecha
+                        }
+                    )
+
+                    fecha_seleccionada = fechas_disponibles[-1]
+
+                    registros_filtrados = [
+                        registro
+                        for registro in registros_con_fecha
+                        if registro["_fecha"]
+                        == fecha_seleccionada
+                    ]
+
+                    nombre_hoja = "Registro diario"
+                    nombre_archivo = (
+                        "registro_biopsias_"
+                        f"{fecha_seleccionada:%Y-%m-%d}.xlsx"
+                    )
+
+                    periodo_texto = (
+                        fecha_seleccionada.strftime("%d/%m/%Y")
+                    )
+
+            else:
+                meses_disponibles = agrupar_formularios_por_mes(
+                    formularios
+                )
+
+                if not meses_disponibles:
+                    st.info(
+                        "No se pudo determinar el mes de los "
+                        "formularios guardados."
+                    )
+
+                else:
+                    indice_mes = st.selectbox(
+                        "Seleccionar mes",
+                        options=range(len(meses_disponibles)),
+                        format_func=lambda indice: (
+                            meses_disponibles[indice]["etiqueta"]
+                        ),
+                        key="mes_reporte_excel",
+                    )
+
+                    mes_elegido = meses_disponibles[indice_mes]
+
+                    with st.spinner(
+                        "Consultando respuestas de Google Forms..."
+                    ):
+                        registros = []
+                        for formulario in mes_elegido["formularios"]:
+                            registros.extend(
+                                obtener_registros_formulario(
+                                    formulario["form_id_google"]
+                                )
+                            )
+
+                    registros_con_fecha = [
+                        registro
+                        for registro in registros
+                        if registro.get("_fecha") is not None
+                        and registro["_fecha"].year
+                        == mes_elegido["anio"]
+                        and registro["_fecha"].month
+                        == mes_elegido["mes"]
+                    ]
+
+                    if not registros_con_fecha:
+                        st.info(
+                            "Este mes todavía no tiene respuestas "
+                            "con una fecha válida."
+                        )
+
+                    else:
+                        registros_filtrados = registros_con_fecha
+
+                        nombre_hoja = "Registro mensual"
+                        nombre_archivo = (
+                            "registro_biopsias_"
+                            f"{mes_elegido['anio']}-"
+                            f"{mes_elegido['mes']:02d}.xlsx"
+                        )
+
+                        periodo_texto = mes_elegido["etiqueta"]
+
+            if registros_filtrados is not None:
+                if not registros_filtrados:
+                    st.warning(
+                        "No existen respuestas en el periodo "
+                        "seleccionado."
+                    )
+
+                else:
+                    filas_reporte = construir_filas_reporte(
+                        registros_filtrados
+                    )
+
+                    totales_procedimientos_reporte = (
+                        construir_totales_procedimientos(
+                            registros_filtrados
+                        )
+                    )
+
+                    totales_biopsias_reporte = (
+                        construir_totales_biopsias(
+                            registros_filtrados
+                        )
+                    )
+
+                    totales_adicionales_reporte = (
+                        construir_totales_procedimientos_adicionales(
+                            registros_filtrados
+                        )
+                    )
+
+                    st.metric(
+                        "Registros",
+                        len(filas_reporte),
+                    )
+
+                    st.caption(
+                        f"Periodo seleccionado: {periodo_texto}"
+                    )
+
+                    contenido_excel = crear_excel_registro(
+                        filas_reporte,
+                        nombre_hoja,
+                        totales_procedimientos_reporte,
+                        totales_biopsias_reporte,
+                        totales_adicionales_reporte,
+                    )
+
+                    st.download_button(
+                        "⬇️ Descargar registro en Excel",
+                        data=contenido_excel,
+                        file_name=nombre_archivo,
+                        mime=(
+                            "application/vnd.openxmlformats-"
+                            "officedocument.spreadsheetml.sheet"
+                        ),
+                        use_container_width=True,
+                        type="primary",
+                        key="descargar_reporte_excel",
+                    )
+
+                    st.subheader("Vista previa")
+
+                    st.dataframe(
+                        filas_para_vista_previa(
+                            filas_reporte
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    if st.button(
+                        "Actualizar respuestas",
+                        use_container_width=True,
+                        key="actualizar_reporte_excel",
+                    ):
+                        st.rerun()
+
+    except requests.exceptions.ConnectionError:
+        st.error(
+            "No se pudo conectar con Apps Script. "
+            "Verifica tu conexión a internet."
+        )
+
+    except requests.exceptions.Timeout:
+        st.error(
+            "Apps Script tardó demasiado en responder."
+        )
+
+    except HttpError as error:
+        st.error(
+            "Google no permitió consultar las respuestas."
+        )
+        st.code(str(error))
+
+    except Exception as error:
+        st.error(
+            "No se pudo generar el reporte."
+        )
+        st.code(str(error))
+
+
+elif opcion_menu == "📥 Indicadores":
+    st.title("📥 Indicadores")
+
+    st.markdown(
+        """
+        <p class="descripcion-seccion">
+            Resumen de los registros de biopsias almacenados en Google Forms.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    try:
+        formularios = listar_formularios_apps_script()
+
+        if not formularios:
+            st.info("No hay formularios guardados.")
+
+        else:
+            meses_disponibles = agrupar_formularios_por_mes(
+                formularios
+            )
+
+            if not meses_disponibles:
+                st.info(
+                    "No se pudo determinar el mes de los formularios "
+                    "guardados."
+                )
+
+            else:
+                indice_mes = st.selectbox(
+                    "Seleccionar mes",
+                    options=range(len(meses_disponibles)),
+                    format_func=lambda indice: (
+                        meses_disponibles[indice]["etiqueta"]
+                    ),
+                    key="mes_indicadores_nube",
+                )
+
+                mes_seleccionado = meses_disponibles[indice_mes]
+
+                with st.spinner(
+                    "Consultando respuestas de Google Forms..."
+                ):
+                    registros = []
+                    for formulario in mes_seleccionado["formularios"]:
+                        registros.extend(
+                            obtener_registros_formulario(
+                                formulario["form_id_google"]
+                            )
+                        )
+
+                if not registros:
+                    st.info(
+                        "Este mes todavía no tiene respuestas."
+                    )
+
+                else:
+                    total_registros = len(registros)
+
+                    st.metric("Registros", total_registros)
+
+                    # =================================================
+                    # TOTALES DEL MES SELECCIONADO
+                    # (Procedimientos / Biopsias / Adicionales)
+                    # =================================================
+
+                    hoy = datetime.now(
+                        ZoneInfo("America/Lima")
+                    ).date()
+                    inicio_mes = date(
+                        mes_seleccionado["anio"],
+                        mes_seleccionado["mes"],
+                        1,
+                    )
+
+                    # Si el mes elegido es el actual, se corta en hoy
+                    # (todavía no terminó); si es un mes pasado, se
+                    # muestra completo hasta su último día.
+                    if (
+                        mes_seleccionado["anio"] == hoy.year
+                        and mes_seleccionado["mes"] == hoy.month
+                    ):
+                        fin_mes = hoy
+                    else:
+                        ultimo_dia_mes = calendar.monthrange(
+                            mes_seleccionado["anio"],
+                            mes_seleccionado["mes"],
+                        )[1]
+                        fin_mes = date(
+                            mes_seleccionado["anio"],
+                            mes_seleccionado["mes"],
+                            ultimo_dia_mes,
+                        )
+
+                    registros_mes = [
+                        registro
+                        for registro in registros
+                        if registro.get("_fecha") is not None
+                        and inicio_mes
+                        <= registro["_fecha"]
+                        <= fin_mes
+                    ]
+
+                    total_procedimientos_mes = sum(
+                        construir_totales_procedimientos(
+                            registros_mes
+                        ).values()
+                    )
+                    total_biopsias_mes = sum(
+                        construir_totales_biopsias(
+                            registros_mes
+                        ).values()
+                    )
+                    total_adicionales_mes = sum(
+                        construir_totales_procedimientos_adicionales(
+                            registros_mes
+                        ).values()
+                    )
+
+                    st.subheader(
+                        f"Totales de {mes_seleccionado['etiqueta']}"
+                    )
+
+                    columna_proc, columna_biop, columna_adic = (
+                        st.columns(3)
+                    )
+
+                    with columna_proc:
+                        st.metric(
+                            "Total Procedimientos",
+                            total_procedimientos_mes,
+                        )
+
+                    with columna_biop:
+                        st.metric(
+                            "Total Biopsias",
+                            total_biopsias_mes,
+                        )
+
+                    with columna_adic:
+                        st.metric(
+                            "Total Proc. Adicionales",
+                            total_adicionales_mes,
+                        )
+
+                    # Un día por fila, desde el 1 del mes hasta el fin
+                    # calculado arriba, con las atenciones DE ESE DÍA
+                    # (no acumuladas) de cada una de las 3 categorías,
+                    # en ese orden: Procedimientos, Biopsias, Proc.
+                    # Adicionales. El acumulado del mes se muestra
+                    # aparte, en los "Totales de <mes>" de arriba.
+                    dias_del_mes = [
+                        inicio_mes + timedelta(dias)
+                        for dias in range(
+                            (fin_mes - inicio_mes).days + 1
+                        )
+                    ]
+
+                    filas_mensual = []
+
+                    for dia in dias_del_mes:
+                        registros_dia = [
+                            registro
+                            for registro in registros_mes
+                            if registro.get("_fecha") == dia
+                        ]
+                        total_dia_procedimientos = sum(
+                            construir_totales_procedimientos(
+                                registros_dia
+                            ).values()
+                        )
+                        total_dia_biopsias = sum(
+                            construir_totales_biopsias(
+                                registros_dia
+                            ).values()
+                        )
+                        total_dia_adicionales = sum(
+                            construir_totales_procedimientos_adicionales(
+                                registros_dia
+                            ).values()
+                        )
+                        filas_mensual.append(
+                            {
+                                "Fecha": dia.strftime("%d/%m"),
+                                "Procedimientos": total_dia_procedimientos,
+                                "Biopsias": total_dia_biopsias,
+                                "Proc. Adicionales": total_dia_adicionales,
+                            }
+                        )
+
+                    orden_categorias = [
+                        "Procedimientos",
+                        "Biopsias",
+                        "Proc. Adicionales",
+                    ]
+
+                    datos_mensual_largo = pd.DataFrame(
+                        filas_mensual
+                    ).melt(
+                        id_vars="Fecha",
+                        value_vars=orden_categorias,
+                        var_name="Categoría",
+                        value_name="Cantidad",
+                    )
+
+                    maximo_valor = (
+                        int(datos_mensual_largo["Cantidad"].max())
+                        if not datos_mensual_largo.empty
+                        else 0
+                    )
+                    techo_eje = max(
+                        10,
+                        math.ceil((maximo_valor + 1) / 10) * 10,
+                    )
+                    valores_eje = list(
+                        range(0, techo_eje + 1, 10)
+                    )
+
+                    orden_fechas = [
+                        dia.strftime("%d/%m") for dia in dias_del_mes
+                    ]
+
+                    eje_x = alt.X(
+                        "Fecha:N",
+                        sort=orden_fechas,
+                        title="Fecha",
+                    )
+                    eje_y = alt.Y(
+                        "Cantidad:Q",
+                        title="Cantidad del día",
+                        scale=alt.Scale(domain=[0, techo_eje]),
+                        axis=alt.Axis(values=valores_eje),
+                    )
+                    color_categoria = alt.Color(
+                        "Categoría:N",
+                        sort=orden_categorias,
+                        legend=alt.Legend(title=None),
+                    )
+                    offset_categoria = alt.XOffset(
+                        "Categoría:N",
+                        sort=orden_categorias,
+                    )
+
+                    # Ancho fijo de cada barra en píxeles: así el
+                    # grosor se mantiene estándar sin importar si el
+                    # mes lleva 1 o 31 días transcurridos (antes, al
+                    # llenar el contenedor con pocas fechas, las
+                    # barras se veían más gruesas).
+                    ancho_barra = 16
+
+                    barras = (
+                        alt.Chart(datos_mensual_largo)
+                        .mark_bar(size=ancho_barra)
+                        .encode(
+                            x=eje_x,
+                            xOffset=offset_categoria,
+                            y=eje_y,
+                            color=color_categoria,
+                            tooltip=[
+                                "Fecha",
+                                "Categoría",
+                                "Cantidad",
+                            ],
+                        )
+                    )
+
+                    # Cantidad marcada sobre cada barra (todas las
+                    # fechas, no solo la última).
+                    etiquetas_totales = (
+                        alt.Chart(datos_mensual_largo)
+                        .mark_text(
+                            align="center",
+                            baseline="bottom",
+                            dy=-4,
+                            fontWeight="bold",
+                            fontSize=13,
+                        )
+                        .encode(
+                            x=eje_x,
+                            xOffset=offset_categoria,
+                            y=eje_y,
+                            text="Cantidad:Q",
+                            color=color_categoria,
+                        )
+                    )
+
+                    grafico_mensual = (
+                        barras + etiquetas_totales
+                    ).configure_legend(
+                        title=None,
+                    )
+
+                    # El título va como elemento de Streamlit aparte,
+                    # dentro del mismo contenedor que el gráfico (no
+                    # como "title" del propio gráfico de Altair): así
+                    # el espacio antes del texto se controla con el
+                    # margin-top de ".titulo-grafico-mensual" en el
+                    # CSS de arriba, que sí responde de forma
+                    # confiable, en vez del "offset" de Altair.
+                    with st.container(key="caja_grafico_mensual"):
+                        st.altair_chart(
+                            grafico_mensual,
+                            use_container_width=True,
+                        )
+                        st.markdown(
+                            '<div class="titulo-grafico-mensual">'
+                            "Atenciones diarias del mes"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    if st.button(
+                        "Actualizar indicadores",
+                        use_container_width=True,
+                        key="actualizar_indicadores_nube",
+                    ):
+                        st.rerun()
+
+    except requests.exceptions.ConnectionError:
+        st.error(
+            "No se pudo conectar con Apps Script. "
+            "Verifica tu conexión a internet."
+        )
+
+    except requests.exceptions.Timeout:
+        st.error(
+            "Apps Script tardó demasiado en responder."
+        )
+
+    except HttpError as error:
+        st.error(
+            "Google no permitió consultar las respuestas."
+        )
+        st.code(str(error))
+
+    except Exception as error:
+        st.error(
+            "No se pudieron generar los indicadores."
+        )
+        st.code(str(error))
