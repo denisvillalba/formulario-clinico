@@ -2014,7 +2014,7 @@ st.markdown(
     [data-testid="stMain"] [data-testid="stMetricLabel"] span {
         color: #003C84 !important;
         font-weight: 650 !important;
-        font-size: 22px !important;
+        font-size: 16px !important;
         text-shadow:
             0 0 5px rgba(255, 255, 255, 0.65),
             0 0 10px rgba(255, 255, 255, 0.40) !important;
@@ -3444,11 +3444,17 @@ if opcion_menu == "🏠 Formulario":
                     guardar_respuesta_apps_script(
                         st.session_state["form_id"],
                         fila,
-                    )
-                    st.success("**Registro guardado correctamente.**")
+                    ) 
+                    marcador_exito = st.empty()
+                    marcador_exito.success("**Registro guardado correctamente.**")
+                    time.sleep(3)
+                    marcador_exito.empty()
                 except Exception as error:
                     st.error("No se pudo guardar el registro.")
                     st.code(str(error))
+
+                    
+                
 
 
 elif opcion_menu == "📋 Reportes":
