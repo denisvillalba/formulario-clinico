@@ -2115,6 +2115,10 @@ st.markdown(
         color: #EDF2F5 !important;
     }
 
+    [data-testid="stMain"] .stTextArea textarea {
+        color: #4A6B7A !important;
+    }
+
     /* Spinner - texto de conexión con Google */
     [data-testid="stSpinner"] p {
         font-size: 19px !important;
@@ -3270,7 +3274,7 @@ if opcion_menu == "🏠 Formulario":
 
                 with col_equipos:
                     valor_equipos = st.selectbox(
-                        "Equipos",
+                        "Equipos*",
                         options=[""] + EQUIPOS_DISPONIBLES,
                         format_func=lambda opcion: "Otro" if opcion == "Otros" else opcion,
                     )
@@ -3387,6 +3391,11 @@ if opcion_menu == "🏠 Formulario":
                 faltantes.append("Cantidad")
             elif not valor_cantidad.strip().isdigit():
                 faltantes.append("Cantidad (debe ser un número)")
+
+            if not valor_equipos:
+                faltantes.append("Equipos")
+            elif valor_equipos == "Otros" and not valor_otro_equipo.strip():
+                faltantes.append("Otro equipo (indica cuál)")
 
             if faltantes:
                 st.error(
