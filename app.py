@@ -4016,14 +4016,7 @@ elif opcion_menu == "📥 Indicadores":
                             "Atenciones diarias del mes"
                             "</div>",
                             unsafe_allow_html=True,
-                        )
-
-                    if st.button(
-                        "Actualizar indicadores",
-                        use_container_width=True,
-                        key="actualizar_indicadores_nube",
-                    ):
-                        st.rerun()
+                        )                   
 
     except requests.exceptions.ConnectionError:
         st.error(
