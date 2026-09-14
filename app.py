@@ -3682,13 +3682,6 @@ elif opcion_menu == "📋 Reportes":
                         hide_index=True,
                     )
 
-                    if st.button(
-                        "Actualizar respuestas",
-                        use_container_width=True,
-                        key="actualizar_reporte_excel",
-                    ):
-                        st.rerun()
-
     except requests.exceptions.ConnectionError:
         st.error(
             "No se pudo conectar con Apps Script. "
