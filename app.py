@@ -1781,8 +1781,6 @@ with st.sidebar:
 
     st.divider()
 
-    st.caption("Cuenta de Google")
-    st.info("Autorización al usar Google")
     st.caption("✅ VERSIÓN APPS SCRIPT - 08/08/2026")
 
     st.markdown(
@@ -3070,7 +3068,7 @@ if opcion_menu == "🏠 Formulario":
     )
 
     with columna_flujo:
-        col_paso1, col_paso3 = st.columns(2)
+        col_vacio_izq, col_paso1, col_vacio_der = st.columns([1, 2, 1])
 
         with col_paso1:
             with st.container(key="flujo_paso_1"):
@@ -3168,41 +3166,6 @@ if opcion_menu == "🏠 Formulario":
                     "No se pudo crear la hoja de registro."
             )
             st.code(str(error))
-
-
-    # =========================================================
-    # PASO 3 DEL FLUJO PRINCIPAL (VER RESPUESTAS)
-    # =========================================================
-
-    if st.session_state.get("form_id"):
-
-        url_hoja = st.session_state.get("form_url", "")
-
-        with col_paso3:
-            with st.container(key="flujo_paso_3"):
-                if url_hoja:
-                    st.link_button(
-                        "3. Ver respuestas",
-                        url_hoja,
-                        use_container_width=True,
-                    )
-                else:
-                    st.button(
-                        "3. Ver respuestas",
-                        disabled=True,
-                        use_container_width=True,
-                        key="paso_ver_disabled",
-                    )
-
-    else:
-        with col_paso3:
-            with st.container(key="flujo_paso_3"):
-                st.button(
-                    "3. Ver respuestas",
-                    disabled=True,
-                    use_container_width=True,
-                    key="paso_ver_disabled",
-                )
 
     # =========================================================
     # FORMULARIO NATIVO DE REGISTRO (reemplaza al Google Form)
@@ -3677,6 +3640,36 @@ elif opcion_menu == "📋 Reportes":
                     st.dataframe(
                         filas_para_vista_previa(
                             filas_reporte
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.subheader("Totales por Procedimiento")
+                    st.dataframe(
+                        pd.DataFrame(
+                            list(totales_procedimientos_reporte.items()),
+                            columns=["Procedimiento", "Total"],
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.subheader("Totales por Biopsia")
+                    st.dataframe(
+                        pd.DataFrame(
+                            list(totales_biopsias_reporte.items()),
+                            columns=["Tipo de Biopsia", "Total"],
+                        ),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    st.subheader("Totales de Procedimientos Adicionales")
+                    st.dataframe(
+                        pd.DataFrame(
+                            list(totales_adicionales_reporte.items()),
+                            columns=["Procedimiento Adicional", "Total"],
                         ),
                         use_container_width=True,
                         hide_index=True,
