@@ -3223,6 +3223,7 @@ if opcion_menu == "🏠 Formulario":
                 with col_otro_proc:
                     valor_otro_procedimiento = st.text_input(
                         "Si seleccionaste Otro",
+                        placeholder="PUEDE IR VACIO",
                         help='Completar solo si eligió "Otros" arriba.',
                         key="otro_procedimiento",
                     )
@@ -3245,6 +3246,7 @@ if opcion_menu == "🏠 Formulario":
                 with col_otro_equipo:
                     valor_otro_equipo = st.text_input(
                         "Si seleccionaste Otro",
+                        placeholder="PUEDE IR VACIO",
                         help='Completar solo si eligió "Otros" arriba.',
                         key="otro_equipo",
                     )
