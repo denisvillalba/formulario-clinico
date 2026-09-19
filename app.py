@@ -1838,6 +1838,19 @@ if FONDO_HOSPITAL_BASE64:
             background-attachment: scroll !important;
             min-height: 100vh !important;
         }}
+
+            /* Caja de Cantidad (Procedimiento) */
+        .st-key-cantidad_procedimiento div[data-baseweb="input"],
+        .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
+        .st-key-cantidad_procedimiento input {
+            background-color: #FFF3C4 !important;
+        }
+
+        .st-key-cantidad_procedimiento div[data-baseweb="input"] {
+            border: 1.5px solid #E0A800 !important;
+            border-radius: 8px !important;
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -3260,6 +3273,7 @@ if opcion_menu == "🏠 Formulario":
                         "Cantidad (Procedimiento) *",
                         placeholder="CANTIDAD DEL PROCEDIMIENTO",
                         help="Cantidad del procedimiento seleccionado.",
+                        key="cantidad_procedimiento",
                     )
 
                 col_equipos, col_otro_equipo = st.columns(2)
