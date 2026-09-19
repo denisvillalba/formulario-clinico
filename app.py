@@ -3274,7 +3274,7 @@ if opcion_menu == "🏠 Formulario":
                 with col_otro_equipo:
                     valor_otro_equipo = st.text_input(
                         "Si seleccionaste Otro",
-                        placeholder="PUEDE IR VACIO /Nombre Otro",
+                        placeholder="PUEDE IR VACIO / Nombre Otro",
                         help='Completar solo si eligió "Otros" arriba.',
                         key="otro_equipo",
                     )
@@ -3291,7 +3291,7 @@ if opcion_menu == "🏠 Formulario":
                             0 2px 4px rgba(0, 0, 0, 0.85),
                             0 0 8px rgba(0, 0, 0, 0.40);
                     ">
-                        Biopsias: Cantidad.
+                        Biopsias: Cantidades
                     </div>
                     """,
                     unsafe_allow_html=True,
