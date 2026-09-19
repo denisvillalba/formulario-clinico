@@ -1321,7 +1321,7 @@ def construir_filas_reporte(registros):
                 PREFIJO_CANTIDAD_BIOPSIA,
                 PREFIJO_CANTIDAD_BIOPSIA_ANTERIOR,
                 categoria,
-            )
+            ) or 0
 
         for adicional in PROCEDIMIENTOS_ADICIONALES:
             fila[f"Proc. adic [{adicional}]"] = obtener_cantidad_compat(
@@ -2927,7 +2927,7 @@ st.markdown(
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] input {
-        background-color: #FFF3C4 !important;
+        background-color: #FFF7D7 !important;
     }
 
     </style>
@@ -3331,6 +3331,7 @@ if opcion_menu == "🏠 Formulario":
                     with columnas_biopsia[indice % 4]:
                         cantidades_biopsia[categoria] = st.text_input(
                             categoria,
+                            placeholder="0"
                             key=f"cant_biopsia_{categoria}",
                         )
 
@@ -3374,6 +3375,7 @@ if opcion_menu == "🏠 Formulario":
                     with columnas_adicionales[indice % 4]:
                         cantidades_adicionales[tecnica] = st.text_input(
                             tecnica,
+                            placeholder="0",
                             key=f"cant_adicional_{tecnica}",
                         )
 
@@ -3411,8 +3413,13 @@ if opcion_menu == "🏠 Formulario":
                 faltantes.append("Procedimiento")
             if not valor_cantidad.strip():
                 faltantes.append("Cantidad")
+
+            if not valor_cantidad.strip():
+                faltantes.append("Cantidad")
             elif not valor_cantidad.strip().isdigit():
                 faltantes.append("Cantidad (debe ser un número)")
+            elif int(valor_cantidad.strip()) < 1:
+                faltantes.append("Cantidad (debe ser 1 o más)")
 
             if not valor_equipos:
                 faltantes.append("Equipos")
