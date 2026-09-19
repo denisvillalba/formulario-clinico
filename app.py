@@ -3330,7 +3330,7 @@ if opcion_menu == "🏠 Formulario":
                 for indice, categoria in enumerate(categorias_biopsia_grid):
                     with columnas_biopsia[indice % 4]:
                         cantidades_biopsia[categoria] = st.text_input(
-                            categoria,v
+                            categoria,
                             placeholder="0",
                             key=f"cant_biopsia_{categoria}",
                         )
