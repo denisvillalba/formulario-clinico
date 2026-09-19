@@ -3218,14 +3218,23 @@ if opcion_menu == "🏠 Formulario":
 
                 col_medico, col_enfermera, col_tecnica = st.columns(3)
 
-                with col_medico:
-                    valor_medico = st.text_input("Médico *")
+                                with col_medico:
+                    valor_medico = st.selectbox(
+                        "Médico *",
+                        options=[""] + MEDICOS_DISPONIBLES,
+                    )
 
                 with col_enfermera:
-                    valor_enfermera = st.text_input("Enfermera *")
+                    valor_enfermera = st.selectbox(
+                        "Enfermera *",
+                        options=[""] + ENFERMERAS_DISPONIBLES,
+                    )
 
                 with col_tecnica:
-                    valor_tecnica = st.text_input("Técnica *")
+                    valor_tecnica = st.selectbox(
+                        "Técnica *",
+                        options=[""] + TECNICAS_DISPONIBLES,
+                    )
 
                 st.markdown("---")
 
