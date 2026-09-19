@@ -352,13 +352,13 @@ CATEGORIAS_BIOPSIA = [
 PROCEDIMIENTOS_ADICIONALES = [
     "Sedación",
     "Anestesia",
-    "APL",
+    "APC",
     "ELVE",
     "Colocación enema",
     "Inyectoterapia",
     "Clip",
-    "Polipectm alta",
-    "Polipectm baja",
+    "Polipectomía alta",
+    "Polipectomía baja",
     "Mucosectomía",
 ]
 
