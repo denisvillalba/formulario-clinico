@@ -3308,7 +3308,7 @@ if opcion_menu == "🏠 Formulario":
                             key=f"cant_biopsia_{categoria}",
                         )
 
-                col_otra_cantidad, col_otra_biopsia = st.columns(2)
+                col_otra_biopsia, col_otra_cantidad = st.columns(2)
                 
                 with col_otra_biopsia:
                     valor_otra_biopsia = st.text_input(
@@ -3320,7 +3320,7 @@ if opcion_menu == "🏠 Formulario":
                      cantidades_biopsia["Otros"] = st.text_input(
                             "Otra biopsia (Cantidad)",
                             key="cant_biopsia_Otros",
-                )
+                    )
 
                 st.markdown("---")
                 st.markdown(
