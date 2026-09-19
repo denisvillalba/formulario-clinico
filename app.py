@@ -1329,7 +1329,7 @@ def construir_filas_reporte(registros):
                 PREFIJO_CANTIDAD_ADICIONAL,
                 PREFIJO_CANTIDAD_ADICIONAL_ANTERIOR,
                 adicional,
-            )
+            ) or 0
 
         filas.append(fila)
 
@@ -3330,7 +3330,7 @@ if opcion_menu == "🏠 Formulario":
                 for indice, categoria in enumerate(categorias_biopsia_grid):
                     with columnas_biopsia[indice % 4]:
                         cantidades_biopsia[categoria] = st.text_input(
-                            categoria,
+                            categoria,v
                             placeholder="0",
                             key=f"cant_biopsia_{categoria}",
                         )
