@@ -1840,16 +1840,16 @@ if FONDO_HOSPITAL_BASE64:
         }}
 
             /* Caja de Cantidad (Procedimiento) */
-        .st-key-cantidad_procedimiento div[data-baseweb="input"],
-        .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
-        .st-key-cantidad_procedimiento input {
-            background-color: #FFF3C4 !important;
-        }
+            .st-key-cantidad_procedimiento div[data-baseweb="input"],
+            .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
+            .st-key-cantidad_procedimiento input {
+                background-color: #FFF3C4 !important;
+            }
 
-        .st-key-cantidad_procedimiento div[data-baseweb="input"] {
-            border: 1.5px solid #E0A800 !important;
-            border-radius: 8px !important;
-        }
+            .st-key-cantidad_procedimiento div[data-baseweb="input"] {
+                border: 1.5px solid #E0A800 !important;
+                border-radius: 8px !important;
+            }
 
         </style>
         """,
