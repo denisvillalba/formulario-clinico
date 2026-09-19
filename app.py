@@ -350,6 +350,7 @@ CATEGORIAS_BIOPSIA = [
 # Igual que Biopsia, es una cuadrícula: cada técnica en una fila, cantidad
 # al costado.
 PROCEDIMIENTOS_ADICIONALES = [
+    "Biopsia",
     "Sedación",
     "Anestesia",
     "APC",
@@ -360,6 +361,7 @@ PROCEDIMIENTOS_ADICIONALES = [
     "Polipectomía alta",
     "Polipectomía baja",
     "Mucosectomía",
+    
 ]
 
 PREFIJO_CANTIDAD_PROCEDIMIENTO = "Cantidad procedimiento - "
