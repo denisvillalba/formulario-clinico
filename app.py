@@ -3313,13 +3313,15 @@ if opcion_menu == "🏠 Formulario":
                 with col_otra_biopsia:
                     valor_otra_biopsia = st.text_input(
                         "Otra biopsia (Nombre)",
+                        placeholder="PUEDE IR VACIO",
                         help='Completar solo si puso una cantidad en "Otra biopsia (Cantidad)" arriba.',
                     )
 
                 with col_otra_cantidad:
                      cantidades_biopsia["Otros"] = st.text_input(
-                            "Otra biopsia (Cantidad)",
-                            key="cant_biopsia_Otros",
+                        "Otra biopsia (Cantidad)",
+                        placeholder="PUEDE IR VACIO",
+                        key="cant_biopsia_Otros",
                     )
 
                 st.markdown("---")
