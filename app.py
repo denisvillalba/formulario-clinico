@@ -394,6 +394,22 @@ EQUIPOS_DISPONIBLES = [
     "Otros",
 ]
 
+MEDICOS_DISPONIBLES = [
+    "Dr. Osorio",
+    "Dr. Mallma",
+    "Dr. jaen",
+]
+
+ENFERMERAS_DISPONIBLES = [
+    "Lic. Luisa",
+    "Lic. Liliana",
+]
+
+TECNICAS_DISPONIBLES = [
+    "Tec. Tamara",
+    "Tec. Shirley",
+]
+
 # Columnas que se mostrarán en las cuadrículas de Google Forms.
 # Deje la fila en blanco cuando ese procedimiento/biopsia no corresponda.
 CANTIDADES_GRID = [str(numero) for numero in range(1, 9)]
