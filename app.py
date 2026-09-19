@@ -3218,7 +3218,7 @@ if opcion_menu == "🏠 Formulario":
 
                 col_medico, col_enfermera, col_tecnica = st.columns(3)
 
-                                with col_medico:
+                with col_medico:
                     valor_medico = st.selectbox(
                         "Médico *",
                         options=[""] + MEDICOS_DISPONIBLES,
