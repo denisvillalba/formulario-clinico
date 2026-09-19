@@ -2909,6 +2909,13 @@ st.markdown(
         2px 2px 4px rgba(0,0,0,0.90) !important;
     }
 
+    /* Caja de Cantidad (Procedimiento) */
+    .st-key-cantidad_procedimiento div[data-baseweb="input"],
+    .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
+    .st-key-cantidad_procedimiento input {
+        background-color: #FFF3C4 !important;
+    }
+
     /* Cajas del grupo "Biopsias: Cantidades" */
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"] > div,
