@@ -3331,7 +3331,7 @@ if opcion_menu == "🏠 Formulario":
                     with columnas_biopsia[indice % 4]:
                         cantidades_biopsia[categoria] = st.text_input(
                             categoria,
-                            placeholder="0"
+                            placeholder="0",
                             key=f"cant_biopsia_{categoria}",
                         )
 
