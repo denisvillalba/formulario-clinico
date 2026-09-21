@@ -676,7 +676,7 @@ COLUMNAS_REPORTE = (
     + [f"Biopsia [{categoria}]" for categoria in CATEGORIAS_BIOPSIA]
     + ["Otra biopsia"]
     + [f"Proc. adic [{adicional}]" for adicional in PROCEDIMIENTOS_ADICIONALES]
-    + ["Observaciones"]
+    + ["Observaciones", "Firma"]
 )
 
 # Columnas de texto libre: se alinean a la izquierda en el Excel. El resto
@@ -1735,6 +1735,7 @@ def crear_excel_registro(
         "Equipos": 14,
         "Otra biopsia": 22,
         "Observaciones": 28,
+        "Firma": 24,
     }
     ancho_columna_predeterminado = 12
 
@@ -3266,7 +3267,10 @@ if opcion_menu == "🏠 Formulario":
         with columna_form:
             st.markdown("#### 2. Registrar respuesta")
             with st.form("formulario_registro_biopsia", clear_on_submit=True):
-                col_fecha, col_turno = st.columns(2)
+
+                col_fecha, col_turno, col_medico, col_enfermera, col_tecnica = st.columns(
+                    [0.9, 2.1, 1.0, 1.0, 1.0], gap="small"
+                )
 
                 with col_fecha:
                     valor_fecha = st.date_input(
@@ -3281,8 +3285,6 @@ if opcion_menu == "🏠 Formulario":
                         "Turno *",
                         options=["Mañana", "Tarde", "Noche"],
                     )
-
-                col_medico, col_enfermera, col_tecnica = st.columns(3)
 
                 with col_medico:
                     valor_medico = st.selectbox(
