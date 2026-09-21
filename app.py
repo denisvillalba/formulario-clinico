@@ -301,10 +301,12 @@ st.set_page_config(
 #   2) Biopsia y cantidad: cada zona aparece en una fila.
 # La cantidad se marca en la misma fila, evitando preguntas separadas debajo.
 PROCEDIMIENTOS_BIOPSIA = [
-    "Endoscopia",
-    "Colonoscopia",
-    "Sigmoidoscopia",
-    "Proctoscopia",
+    "43234 Endoscopia",
+    "45378 Colonoscopia",
+    "45330 Sigmoidoscopia",
+    "45300 Proctoscopia diagnóstica rígida",
+    "46600 Anoscopia",
+    "43239 Biopsia endoscópica alta",
     "Otros",
 ]
 
@@ -330,6 +332,17 @@ BIOPSIAS_POR_PROCEDIMIENTO = {
         "Recto",
         "Otros",
     ],
+    "Anoscopia": [
+        "Ano",
+        "Otros",
+    ],
+    "Biopsia": [
+        "Antro",
+        "Cuerpo",
+        "Ángulo",
+        "Otros",
+    ],
+
 
 }
 
@@ -340,9 +353,11 @@ CATEGORIAS_BIOPSIA = [
     "Cuerpo",
     "Ángulo",
     "Recto",
+    "Ano",
     "Colon ascendente",
     "Colon transverso",
     "Pólipo",
+    "Sigmoides",
     "Otros",
 ]
 
@@ -2135,7 +2150,22 @@ st.markdown(
     }
 
     [data-testid="stMain"] .stTextArea textarea {
-        color: #4A6B7A !important;
+        color: #F1F5F7 !important;
+        font-size: 16px !important;
+        text-shadow: none !important;
+    }
+
+    [data-testid="stMain"] .stTextArea textarea::placeholder {
+        color: #A9B8C3 !important;
+        opacity: 1 !important;
+        font-size: 18px !important;
+        text-shadow: none !important;
+    }
+
+    [data-testid="stMain"] .stTextArea div[data-baseweb="textarea"],
+    [data-testid="stMain"] .stTextArea div[data-baseweb="base-input"],
+    [data-testid="stMain"] .stTextArea textarea {
+        background-color: #262730 !important;
     }
 
     /* Spinner - texto de conexión con Google */
@@ -2913,21 +2943,33 @@ st.markdown(
     .st-key-cantidad_procedimiento div[data-baseweb="input"],
     .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
     .st-key-cantidad_procedimiento input {
-        background-color: #FFF7D7 !important;
+        background-color: #50565F !important;
     }
 
     /* Cajas del grupo "Biopsias: Cantidades" */
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] input {
-        background-color: #FFF7D7 !important;
+        background-color: #50565F !important;
     }
 
     /* Cajas del grupo "Procedimientos adicionales: Cantidad" */
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] input {
-        background-color: #FFF7D7 !important;
+        background-color: #50565F !important;
+    }
+
+    /* Ancho de las cajas de "Biopsias: Cantidades" */
+    [data-testid="stMain"] [class*="st-key-cant_biopsia_"],
+    [data-testid="stMain"] .st-key-otra_biopsia_nombre {
+        width: 100% !important;
+    }
+
+    /* "Otra biopsia (Cantidad)" en una sola línea */
+    [data-testid="stMain"] .st-key-cant_biopsia_Otros label,
+    [data-testid="stMain"] .st-key-cant_biopsia_Otros label p {
+        white-space: nowrap !important;
     }
 
     </style>
@@ -3326,16 +3368,17 @@ if opcion_menu == "🏠 Formulario":
                 categorias_biopsia_grid = [
                     categoria for categoria in CATEGORIAS_BIOPSIA if categoria != "Otros"
                 ]
-                columnas_biopsia = st.columns(4)
+
+                columnas_biopsia = st.columns(5, gap="small")
                 for indice, categoria in enumerate(categorias_biopsia_grid):
-                    with columnas_biopsia[indice % 4]:
+                    with columnas_biopsia[indice % 5]:
                         cantidades_biopsia[categoria] = st.text_input(
                             categoria,
                             placeholder="0",
                             key=f"cant_biopsia_{categoria}",
                         )
-
-                col_otra_biopsia, col_otra_cantidad = st.columns(2)
+                
+                col_otra_biopsia, col_otra_cantidad, _col_vacia = st.columns([2, 1, 2], gap="small")
                 
                 with col_otra_biopsia:
                     valor_otra_biopsia = st.text_input(
@@ -3370,9 +3413,9 @@ if opcion_menu == "🏠 Formulario":
                 )
 
                 cantidades_adicionales = {}
-                columnas_adicionales = st.columns(4)
+                columnas_adicionales = st.columns(5, gap="small")
                 for indice, tecnica in enumerate(PROCEDIMIENTOS_ADICIONALES):
-                    with columnas_adicionales[indice % 4]:
+                    with columnas_adicionales[indice % 5]:
                         cantidades_adicionales[tecnica] = st.text_input(
                             tecnica,
                             placeholder="0",
@@ -3381,13 +3424,13 @@ if opcion_menu == "🏠 Formulario":
 
                 st.markdown("---")
 
-                valor_observaciones = st.text_area("Observaciones")
+                valor_observaciones = st.text_area("Observaciones", height=68)
 
                 st.markdown(
                     """
                     <div class="leyenda-obligatorio">
                         * Campo obligatorio. La columna Firma no se pide
-                        acá: queda en blanco para la firma física posterior.
+                        acá: queda en blanco.
                     </div>
                     """,
                     unsafe_allow_html=True,
