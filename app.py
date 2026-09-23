@@ -2945,7 +2945,7 @@ st.markdown(
     .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
     .st-key-cantidad_procedimiento input {
         background-color: #FFFFFF !important;
-        color: #000000 !important;
+        color: #E7EAEC !important;
     }
 
     /* Cajas del grupo "Biopsias: Cantidades" */
@@ -2953,7 +2953,7 @@ st.markdown(
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] input {
         background-color: #FFFFFF !important;
-        color: #000000 !important;
+        color: #E7EAEC !important;
     }
 
     /* Cajas del grupo "Procedimientos adicionales: Cantidad" */
@@ -2961,7 +2961,7 @@ st.markdown(
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] input {
         background-color: #FFFFFF !important;
-        color: #000000 !important;
+        color: #E7EAEC !important;
     }
 
     /* Encabezados en una sola línea: "Biopsias: Cantidades" y "Procedimientos adicionales" */
