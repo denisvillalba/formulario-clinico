@@ -2944,21 +2944,42 @@ st.markdown(
     .st-key-cantidad_procedimiento div[data-baseweb="input"],
     .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
     .st-key-cantidad_procedimiento input {
-        background-color: #5F6672 !important;
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
     }
 
     /* Cajas del grupo "Biopsias: Cantidades" */
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] input {
-        background-color: #5F6672 !important;
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
     }
 
     /* Cajas del grupo "Procedimientos adicionales: Cantidad" */
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] input {
-        background-color: #5F6672 !important;
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+
+    /* Encabezados en una sola línea: "Biopsias: Cantidades" y "Procedimientos adicionales" */
+    [data-testid="stMain"] [class*="st-key-cant_biopsia_"] label,
+    [data-testid="stMain"] [class*="st-key-cant_biopsia_"] label p,
+    [data-testid="stMain"] [class*="st-key-cant_adicional_"] label,
+    [data-testid="stMain"] [class*="st-key-cant_adicional_"] label p {
+        white-space: nowrap !important;
+        overflow: visible !important;
+        font-size: 13px !important;
+    }
+
+    /* Encabezado "Cantidad (Procedimiento) *" en una sola línea */
+    .st-key-cantidad_procedimiento label,
+    .st-key-cantidad_procedimiento label p {
+        white-space: nowrap !important;
+        overflow: visible !important;
+        font-size: 13px !important;
     }
 
     /* Ancho de las cajas de "Biopsias: Cantidades" */
