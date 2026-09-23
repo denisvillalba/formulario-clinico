@@ -2971,7 +2971,7 @@ st.markdown(
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] label p {
         white-space: nowrap !important;
         overflow: visible !important;
-        font-size: 13px !important;
+        font-size: 15px !important;
     }
 
     /* Encabezado "Cantidad (Procedimiento) *" en una sola línea */
@@ -3200,6 +3200,13 @@ if opcion_menu == "🏠 Formulario":
             "No se pudo verificar si ya existe el formulario de hoy. "
             "Por seguridad, la creación queda temporalmente deshabilitada."
         )
+
+    if error_consulta_formulario_hoy is not None:
+        st.warning(
+            "No se pudo verificar si ya existe el formulario de hoy. "
+            "Por seguridad, la creación queda temporalmente deshabilitada."
+        )
+        st.code(str(error_consulta_formulario_hoy))  # <-- temporal, para ver el error real
 
     # =========================================================
     # CREAR LA HOJA DE REGISTRO DESDE EL BOTÓN DE LA TARJETA
