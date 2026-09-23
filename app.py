@@ -2979,7 +2979,7 @@ st.markdown(
     .st-key-cantidad_procedimiento label p {
         white-space: nowrap !important;
         overflow: visible !important;
-        font-size: 13px !important;
+        font-size: 15px !important;
     }
 
     /* Ancho de las cajas de "Biopsias: Cantidades" */
