@@ -2956,7 +2956,7 @@ st.markdown(
     .st-key-cantidad_procedimiento div[data-baseweb="input"],
     .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
     .st-key-cantidad_procedimiento input {
-        background-color: #E7EAEC !important;
+        background-color: #D9DDE0 !important;
         color: #31333F !important;
     }
 
@@ -2964,7 +2964,7 @@ st.markdown(
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] input {
-        background-color: #E7EAEC !important;
+        background-color: #D9DDE0 !important;
         color: #31333F !important;
     }
 
@@ -2972,7 +2972,7 @@ st.markdown(
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] input {
-        background-color: #E7EAEC !important;
+        background-color: #D9DDE0 !important;
         color: #31333F !important;
     }
 
