@@ -2157,16 +2157,28 @@ st.markdown(
     }
 
     [data-testid="stMain"] .stTextArea textarea::placeholder {
-        color: #A9B8C3 !important;
+        color: #A0A4A8 !important;
+        -webkit-text-fill-color: #A0A4A8 !important;
         opacity: 1 !important;
-        font-size: 18px !important;
+        font-size: 16px !important;
+        text-shadow: none !important;
+    }
+
+        [data-testid="stMain"] .stTextArea textarea::placeholder {
+        color: #A0A4A8 !important;
+        -webkit-text-fill-color: #A0A4A8 !important;
+        opacity: 1 !important;
+        font-size: 16px !important;
         text-shadow: none !important;
     }
 
     [data-testid="stMain"] .stTextArea div[data-baseweb="textarea"],
+    [data-testid="stMain"] .stTextArea div[data-baseweb="textarea"] *,
     [data-testid="stMain"] .stTextArea div[data-baseweb="base-input"],
     [data-testid="stMain"] .stTextArea textarea {
-        background-color: #262730 !important;
+        background-color: #E7EAEC !important;
+        color: #31333F !important;
+        -webkit-text-fill-color: #31333F !important;
     }
 
     /* Spinner - texto de conexión con Google */
