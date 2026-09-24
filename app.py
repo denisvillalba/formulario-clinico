@@ -2181,6 +2181,13 @@ st.markdown(
         -webkit-text-fill-color: #31333F !important;
     }
 
+    /* Observaciones con fondo blanco */
+    [data-testid="stMain"] .st-key-observaciones div[data-baseweb="textarea"],
+    [data-testid="stMain"] .st-key-observaciones div[data-baseweb="textarea"] *,
+    [data-testid="stMain"] .st-key-observaciones div[data-baseweb="base-input"] {
+        background-color: #FFFFFF !important;
+    }
+
     /* Spinner - texto de conexión con Google */
     [data-testid="stSpinner"] p {
         font-size: 19px !important;
@@ -3475,7 +3482,11 @@ if opcion_menu == "🏠 Formulario":
 
                 st.markdown("---")
 
-                valor_observaciones = st.text_area("Observaciones", height=68)
+                valor_observaciones = st.text_area(
+                    "Observaciones",
+                    height=68,
+                    key="observaciones",
+                )
 
                 st.markdown(
                     """
