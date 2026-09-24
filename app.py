@@ -3567,7 +3567,7 @@ if opcion_menu == "🏠 Formulario":
 
             if faltantes:
                 texto_aviso = (
-                    "Completa los campos obligatorios: "
+                    "Por favor, completa los campos obligatorios: "
                     + ", ".join(faltantes)
                 )
                 with st.container(key="aviso_faltantes"):
