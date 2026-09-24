@@ -2944,24 +2944,33 @@ st.markdown(
     .st-key-cantidad_procedimiento div[data-baseweb="input"],
     .st-key-cantidad_procedimiento div[data-baseweb="input"] > div,
     .st-key-cantidad_procedimiento input {
-        background-color: #FFFFFF !important;
-        color: #E7EAEC !important;
+        background-color: #E7EAEC !important;
+        color: #31333F !important;
     }
 
     /* Cajas del grupo "Biopsias: Cantidades" */
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_biopsia_"] input {
-        background-color: #FFFFFF !important;
-        color: #E7EAEC !important;
+        background-color: #E7EAEC !important;
+        color: #31333F !important;
     }
 
     /* Cajas del grupo "Procedimientos adicionales: Cantidad" */
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"],
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] div[data-baseweb="input"] > div,
     [data-testid="stMain"] [class*="st-key-cant_adicional_"] input {
-        background-color: #FFFFFF !important;
-        color: #E7EAEC !important;
+        background-color: #E7EAEC !important;
+        color: #31333F !important;
+    }
+
+    /* Texto predeterminado (placeholder) en gris claro */
+    .st-key-cantidad_procedimiento input::placeholder,
+    [data-testid="stMain"] [class*="st-key-cant_biopsia_"] input::placeholder,
+    [data-testid="stMain"] [class*="st-key-cant_adicional_"] input::placeholder {
+        color: #A0A4A8 !important;
+        -webkit-text-fill-color: #A0A4A8 !important;
+        opacity: 1 !important;
     }
 
     /* Encabezados en una sola línea: "Biopsias: Cantidades" y "Procedimientos adicionales" */
