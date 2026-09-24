@@ -70,7 +70,7 @@ def listar_formularios_apps_script():
             "clave": CLAVE_APPS_SCRIPT,
             "accion": "listar_formularios",
         },
-        timeout=15,
+        timeout=25,
     )
     respuesta.raise_for_status()
 
@@ -3259,12 +3259,7 @@ if opcion_menu == "🏠 Formulario":
                         key="boton_crear_formulario",
                     )
 
-    if error_consulta_formulario_hoy is not None:
-        st.warning(
-            "No se pudo verificar si ya existe el formulario de hoy. "
-            "Por seguridad, la creación queda temporalmente deshabilitada."
-        )
-
+    
     if error_consulta_formulario_hoy is not None:
         st.warning(
             "No se pudo verificar si ya existe el formulario de hoy. "
