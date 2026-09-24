@@ -3014,7 +3014,7 @@ st.markdown(
     [data-testid="stMain"] .st-key-cant_biopsia_Otros label p {
         white-space: nowrap !important;
     }
-
+    
     </style>
     """,
     unsafe_allow_html=True,
@@ -3576,9 +3576,6 @@ if opcion_menu == "🏠 Formulario":
                     st.error("No se pudo guardar el registro.")
                     st.code(str(error))
 
-                    
-                
-
 
 elif opcion_menu == "📋 Reportes":
     st.title("📋 Reportes")
@@ -3616,10 +3613,9 @@ elif opcion_menu == "📋 Reportes":
             if tipo_reporte == "Por día":
                 indice_formulario = st.selectbox(
                     "Seleccionar formulario",
-                    options=range(len(formularios)),
-                    format_func=lambda indice: (
-                        f"{formularios[indice].get('titulo', 'Formulario')} "
-                        f"— {formularios[indice].get('fecha_creacion', '')}"
+                    options=list(range(len(formularios)))[::-1],
+                    format_func=lambda indice: formularios[indice].get(
+                        "titulo", "Formulario"
                     ),
                     key="formulario_reporte_excel",
                 )
