@@ -1815,6 +1815,8 @@ with st.sidebar:
 
     st.divider()
 
+    aviso_menu = st.empty()
+
     st.caption("✅ VERSIÓN APPS SCRIPT - 08/08/2026")
 
     st.markdown(
@@ -2303,6 +2305,17 @@ st.markdown(
 
         /* Separación uniforme respecto a los botones */
         transform: translateY(-4px) !important;
+    }
+
+    /* Aviso de campos obligatorios en naranja */
+    [data-testid="stMain"] .st-key-aviso_faltantes [data-testid="stAlert"] {
+        background: rgba(255, 140, 0, 0.35) !important;
+        border: 1.5px solid #C66A00 !important;
+    }
+
+    [data-testid="stMain"] .st-key-aviso_faltantes [data-testid="stAlert"] p {
+        color: #3A1F00 !important;
+        font-weight: 600 !important;
     }
 
     /* Quitar padding interno de Streamlit */
@@ -3022,6 +3035,28 @@ st.markdown(
     [data-testid="stMain"] .st-key-cant_biopsia_Otros label p {
         white-space: nowrap !important;
     }
+
+    /* Avisos en el menú lateral */
+    .aviso-menu {
+        border-radius: 9px !important;
+        padding: 10px 12px !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+        line-height: 1.35 !important;
+        margin-bottom: 12px !important;
+    }
+
+    .aviso-menu-verde {
+        background: rgba(88, 214, 141, 0.28) !important;
+        border: 1.5px solid #3E9E6A !important;
+        color: #1C4D33 !important;
+    }
+
+    .aviso-menu-naranja {
+        background: rgba(255, 140, 0, 0.30) !important;
+        border: 1.5px solid #C66A00 !important;
+        color: #3A1F00 !important;
+    }
     
     </style>
     """,
@@ -3382,7 +3417,7 @@ if opcion_menu == "🏠 Formulario":
 
                 with col_cantidad:
                     valor_cantidad = st.text_input(
-                        "Cantidad (Procedimiento) *",
+                        "Cantidad (Obligatorio) *",
                         placeholder="CANTIDAD DEL PROCEDIMIENTO",
                         help="Cantidad del procedimiento seleccionado.",
                         key="cantidad_procedimiento",
@@ -3519,9 +3554,6 @@ if opcion_menu == "🏠 Formulario":
                 faltantes.append("Procedimiento")
             if not valor_cantidad.strip():
                 faltantes.append("Cantidad")
-
-            if not valor_cantidad.strip():
-                faltantes.append("Cantidad")
             elif not valor_cantidad.strip().isdigit():
                 faltantes.append("Cantidad (debe ser un número)")
             elif int(valor_cantidad.strip()) < 1:
@@ -3529,17 +3561,29 @@ if opcion_menu == "🏠 Formulario":
 
             if not valor_equipos:
                 faltantes.append("Equipos")
+
             elif valor_equipos == "Otros" and not valor_otro_equipo.strip():
                 faltantes.append("Otro equipo (indica cuál)")
 
             if faltantes:
-                st.error(
+                texto_aviso = (
                     "Completa los campos obligatorios: "
                     + ", ".join(faltantes)
                 )
+                with st.container(key="aviso_faltantes"):
+                    marcador_error = st.empty()
+                    marcador_error.error(texto_aviso)
+                aviso_menu.markdown(
+                    f'<div class="aviso-menu aviso-menu-naranja">⚠️ {texto_aviso}</div>',
+                    unsafe_allow_html=True,
+                )
+                time.sleep(6)
+                marcador_error.empty()
+                aviso_menu.empty()
+            
             else:
                 fila = {
-                    "Fecha": valor_fecha.strftime("%Y-%m-%d"),
+                    "Fecha": valor_fecha.strftime("%Y-%m-%d"),          
                     "Turno": ", ".join(valor_turno),
                     "Médico": valor_medico.strip(),
                     "Enfermera": valor_enfermera.strip(),
@@ -3580,10 +3624,17 @@ if opcion_menu == "🏠 Formulario":
                         st.session_state["form_id"],
                         fila,
                     ) 
+
                     marcador_exito = st.empty()
                     marcador_exito.success("**Registro guardado correctamente.**")
-                    time.sleep(3)
+                    aviso_menu.markdown(
+                        '<div class="aviso-menu aviso-menu-verde">✅ Registro guardado correctamente.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    time.sleep(6)
                     marcador_exito.empty()
+                    aviso_menu.empty()
+                    
                 except Exception as error:
                     st.error("No se pudo guardar el registro.")
                     st.code(str(error))
