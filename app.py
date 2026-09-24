@@ -2182,9 +2182,10 @@ st.markdown(
     }
 
     /* Observaciones con fondo blanco */
-    [data-testid="stMain"] .st-key-observaciones div[data-baseweb="textarea"],
-    [data-testid="stMain"] .st-key-observaciones div[data-baseweb="textarea"] *,
-    [data-testid="stMain"] .st-key-observaciones div[data-baseweb="base-input"] {
+    [data-testid="stMain"] .stTextArea:has(textarea[aria-label="Observaciones"]) div[data-baseweb="textarea"],
+    [data-testid="stMain"] .stTextArea:has(textarea[aria-label="Observaciones"]) div[data-baseweb="textarea"] *,
+    [data-testid="stMain"] .stTextArea:has(textarea[aria-label="Observaciones"]) div[data-baseweb="base-input"],
+    [data-testid="stMain"] .stTextArea:has(textarea[aria-label="Observaciones"]) textarea {
         background-color: #FFFFFF !important;
     }
 
