@@ -2273,21 +2273,47 @@ st.markdown(
         pointer-events: none !important;
     }
 
-    [data-testid="stToolbar"],
+    [data-testid="stToolbarActions"],
+    [data-testid="stMainMenu"],
+    [data-testid="stAppDeployButton"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"] {
         display: none !important;
     }
 
-    [data-testid="stExpandSidebarButton"],
+        [data-testid="stExpandSidebarButton"],
     [data-testid="collapsedControl"] {
         display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: auto !important;
+        height: auto !important;
+        padding: 6px 12px !important;
         visibility: visible !important;
         pointer-events: auto !important;
         background: #FFFFFF !important;
         border-radius: 8px !important;
         box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25) !important;
         z-index: 999999 !important;
+    }
+
+    /* Flecha >> en azul */
+    [data-testid="stExpandSidebarButton"] *,
+    [data-testid="collapsedControl"] * {
+        color: #003C84 !important;
+        fill: #003C84 !important;
+    }
+
+    /* Texto "Menú" debajo de la flecha */
+    [data-testid="stExpandSidebarButton"]::after,
+    [data-testid="collapsedControl"]::after {
+        content: "Menú";
+        font-size: 12px;
+        font-weight: 700;
+        color: #003C84;
+        margin-top: 2px;
+        line-height: 1;
     }
 
     [data-testid="stMain"] [data-testid="stAlert"] p {
