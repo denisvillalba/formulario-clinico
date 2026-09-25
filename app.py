@@ -2266,8 +2266,28 @@ st.markdown(
         padding-top: 0rem !important;
     }
 
+    /* Barra superior invisible, pero conserva el botón para abrir el menú */
     [data-testid="stHeader"] {
+        background: transparent !important;
+        box-shadow: none !important;
+        pointer-events: none !important;
+    }
+
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"] {
         display: none !important;
+    }
+
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="collapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        background: #FFFFFF !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25) !important;
+        z-index: 999999 !important;
     }
 
     [data-testid="stMain"] [data-testid="stAlert"] p {
