@@ -3082,6 +3082,15 @@ st.markdown(
         white-space: nowrap !important;
     }
 
+    /* Logo izquierdo: se mueve a la esquina cuando el menú está oculto */
+    .logo-esquina-izquierda {
+        transition: left 0.3s ease !important;
+    }
+
+    body:has([data-testid="stSidebar"][aria-expanded="false"]) .logo-esquina-izquierda {
+        left: 100px !important;
+    }
+
     /* Avisos en el menú lateral */
     .aviso-menu {
         border-radius: 9px !important;
