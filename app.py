@@ -4058,6 +4058,7 @@ if opcion_menu == "🏠 Formulario":
                                     version_editor + 1
                                 )
                                 cambios_guardados = True
+                                st.session_state["cerrar_editor"] = True
                             except Exception as error:
                                 st.error("No se pudieron guardar los cambios.")
                                 st.code(str(error))
@@ -4072,8 +4073,6 @@ if opcion_menu == "🏠 Formulario":
                 time.sleep(5)
                 marcador_edicion.empty()
                 aviso_menu.empty()
-                st.session_state["cerrar_editor"] = True
-                st.rerun()
 
 elif opcion_menu == "📋 Reportes":
     st.title("📋 Reportes")
