@@ -3862,6 +3862,9 @@ if opcion_menu == "🏠 Formulario":
                     unsafe_allow_html=True,
                 )
 
+            if st.session_state.pop("cerrar_editor", False):
+                st.session_state["mostrar_editor_registros"] = False
+
             mostrar_editor = st.toggle(
                 "✏️ Editar registros de hoy",
                 key="mostrar_editor_registros",
@@ -3909,6 +3912,13 @@ if opcion_menu == "🏠 Formulario":
                         filas_editor.append(fila_editor)
 
                     df_original = pd.DataFrame(filas_editor)
+
+                    for columna in columnas_hoja:
+                        if es_columna_cantidad(columna):
+                            df_original[columna] = pd.to_numeric(
+                                df_original[columna],
+                                errors="coerce",
+                            )
 
                     # Columnas ocultas, fecha bloqueada, listas y números.
                     config_columnas = {
