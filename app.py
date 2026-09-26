@@ -1889,7 +1889,30 @@ if FONDO_HOSPITAL_BASE64:
 st.markdown(
     """
     <style>
-    @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Press+Start+2P&display=swap");
+    @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Press+Start+2P&family=Dancing+Script:wght@600;700&display=swap");
+
+    /* Texto de bienvenida */
+    .bienvenido {
+        font-family: 'Dancing Script', cursive;
+        font-size: 2.2rem;
+        font-weight: 700;
+        line-height: 1;
+        text-align: center;
+        margin: -8px 0 -22px 0;
+        position: relative;
+        top: -25px;
+        background: linear-gradient(90deg, #0d47a1, #1e88e5, #f9a825);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 2px 3px rgba(255,255,255,0.9));
+        animation: aparecer 1.2s ease-out;
+    }
+
+    @keyframes aparecer {
+        from { opacity: 0; transform: translateY(-12px); }
+        to   { opacity: 1; transform: translateY(0); }
+    }
 
     /* Botón de la flecha: aspecto 3D */
     [data-testid="stSidebarCollapseButton"] button,
@@ -3295,6 +3318,8 @@ if opcion_menu == "🏠 Formulario":
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div class="bienvenido">Bienvenido(a)</div>', unsafe_allow_html=True)
+
     margen_izq, columna_tarjeta, margen_der = st.columns(
         [1, 7.2, 1]
     )
@@ -3338,6 +3363,8 @@ if opcion_menu == "🏠 Formulario":
                     f'✓ Formulario diario activo · {fecha_estado}'
                     f'</div>'
                 )
+
+            
 
             st.markdown(
                 f"""
