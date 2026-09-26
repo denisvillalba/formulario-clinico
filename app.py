@@ -3638,7 +3638,7 @@ if opcion_menu == "🏠 Formulario":
 
                 with col_otra_cantidad:
                      cantidades_biopsia["Otros"] = st.text_input(
-                        "Otra biopsia (Cantidad)",
+                        "Cantidad (Otra biopsia)",
                         placeholder="PUEDE IR VACIO",
                         key="cant_biopsia_Otros",
                     )
