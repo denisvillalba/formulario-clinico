@@ -4062,6 +4062,8 @@ if opcion_menu == "🏠 Formulario":
                 time.sleep(5)
                 marcador_edicion.empty()
                 aviso_menu.empty()
+                st.session_state["cerrar_editor"] = True
+                st.rerun()
 
 elif opcion_menu == "📋 Reportes":
     st.title("📋 Reportes")
