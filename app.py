@@ -1896,9 +1896,9 @@ st.markdown(
         font-weight: 700;
         line-height: 1;
         text-align: center;
-        margin: -45px 0 -22px 0;
+        margin: -45px 0 0 0;
         position: relative;
-        top: -25px;
+        top: -35px;
         background: linear-gradient(90deg, #0d47a1, #1e88e5, #f9a825);
         -webkit-background-clip: text;
         background-clip: text;
@@ -2711,7 +2711,7 @@ st.markdown(
         border: 1.8px solid #000000 !important;
         border-radius: 22px !important;
         padding: 2.05rem 2.20rem 2.05rem 2.20rem !important;
-        margin-top: 1.2rem !important;
+        margin-top: -40px !important;
         min-height: 230px !important;
         overflow: hidden !important;
         isolation: isolate !important;
