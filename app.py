@@ -211,6 +211,60 @@ def guardar_respuesta_apps_script(form_id, fila):
 
     return datos
 
+def actualizar_respuestas_apps_script(form_id, cambios):
+    """
+    Envía a Apps Script las filas editadas para que las reemplace en
+    la hoja de registro del día. Cada cambio es:
+        {"fila": n, "fecha_envio_iso": "...", "datos": {columna: valor}}
+    Devuelve cuántas filas se actualizaron.
+    """
+    respuesta = requests.post(
+        URL_APPS_SCRIPT,
+        json={
+            "clave": CLAVE_APPS_SCRIPT,
+            "accion": "actualizar_respuestas",
+            "form_id": form_id,
+            "cambios": cambios,
+        },
+        timeout=60,
+    )
+    respuesta.raise_for_status()
+
+    try:
+        datos = respuesta.json()
+    except ValueError as error:
+        raise ValueError(
+            "Apps Script no devolvió una respuesta JSON válida."
+        ) from error
+
+    if not datos.get("ok"):
+        raise ValueError(
+            datos.get(
+                "error",
+                "Apps Script no pudo actualizar los registros.",
+            )
+        )
+
+    return datos.get("actualizados", 0)
+
+
+def normalizar_valor_hoja(valor):
+    """Convierte cualquier valor de la tabla a texto limpio para
+    comparar y enviar (3.0 -> "3", vacío/NaN -> "")."""
+    if valor is None:
+        return ""
+    if not isinstance(valor, str) and pd.isna(valor):
+        return ""
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    return str(valor).strip()
+
+
+def es_columna_cantidad(nombre):
+    """Columnas numéricas de la hoja de registro."""
+    return nombre == "Cantidad" or nombre.startswith(
+        ("Biopsia - ", "Adicional - ", "Cantidad ")
+    )
 
 # Si logo.png no existe, intenta buscar estomago.png
 if not RUTA_LOGO.exists():
@@ -3792,6 +3846,208 @@ if opcion_menu == "🏠 Formulario":
                     st.error("No se pudo guardar el registro.")
                     st.code(str(error))
 
+        # =====================================================
+        # EDITAR REGISTROS DE HOY (solo editar)
+        # =====================================================
+        margen_izq_ed, columna_editar, margen_der_ed = st.columns([1, 5, 1])
+
+        with columna_editar:
+            mensaje_edicion = st.session_state.pop("mensaje_edicion", None)
+            if mensaje_edicion:
+                st.success(mensaje_edicion)
+
+            mostrar_editor = st.toggle(
+                "✏️ Editar registros de hoy",
+                key="mostrar_editor_registros",
+            )
+
+            if mostrar_editor:
+                registros_hoy = None
+                try:
+                    registros_hoy = obtener_respuestas_apps_script(
+                        st.session_state["form_id"]
+                    )
+                except Exception as error:
+                    st.error("No se pudieron cargar los registros de hoy.")
+                    st.code(str(error))
+
+                if registros_hoy is not None and not registros_hoy:
+                    st.info("Todavía no hay registros guardados hoy.")
+
+                elif registros_hoy:
+                    columnas_ocultas = {"_fila", "_fecha_envio_iso"}
+                    columnas_hoja = [
+                        columna
+                        for columna in registros_hoy[0].keys()
+                        if columna not in columnas_ocultas
+                    ]
+
+                    filas_editor = []
+                    for registro in registros_hoy:
+                        fila_editor = {
+                            "_fila": registro.get("_fila"),
+                            "_fecha_envio_iso": normalizar_valor_hoja(
+                                registro.get("_fecha_envio_iso")
+                            ),
+                        }
+                        for columna in columnas_hoja:
+                            valor = normalizar_valor_hoja(
+                                registro.get(columna, "")
+                            )
+                            if es_columna_cantidad(columna):
+                                fila_editor[columna] = (
+                                    int(valor) if valor.isdigit() else None
+                                )
+                            else:
+                                fila_editor[columna] = valor
+                        filas_editor.append(fila_editor)
+
+                    df_original = pd.DataFrame(filas_editor)
+
+                    # Columnas ocultas, fecha bloqueada, listas y números.
+                    config_columnas = {
+                        "_fila": None,
+                        "_fecha_envio_iso": None,
+                        "Fecha": st.column_config.TextColumn(
+                            "Fecha",
+                            disabled=True,
+                        ),
+                    }
+
+                    listas_opciones = {
+                        "Médico": MEDICOS_DISPONIBLES,
+                        "Enfermera": ENFERMERAS_DISPONIBLES,
+                        "Técnica": TECNICAS_DISPONIBLES,
+                        "Procedimiento": PROCEDIMIENTOS_BIOPSIA,
+                        "Equipos": EQUIPOS_DISPONIBLES,
+                    }
+
+                    for columna, opciones in listas_opciones.items():
+                        if columna in df_original.columns:
+                            # Incluye valores antiguos que ya no estén
+                            # en la lista, para no perderlos.
+                            extras = [
+                                valor
+                                for valor in df_original[columna].unique()
+                                if valor and valor not in opciones
+                            ]
+                            config_columnas[columna] = (
+                                st.column_config.SelectboxColumn(
+                                    columna,
+                                    options=list(opciones) + extras,
+                                )
+                            )
+
+                    for columna in columnas_hoja:
+                        if es_columna_cantidad(columna):
+                            config_columnas[columna] = (
+                                st.column_config.NumberColumn(
+                                    columna,
+                                    min_value=0,
+                                    step=1,
+                                    format="%d",
+                                )
+                            )
+
+                    version_editor = st.session_state.get(
+                        "version_editor", 0
+                    )
+
+                    with st.form(f"form_editar_registros_{version_editor}"):
+                        st.caption(
+                            "Haz doble clic en una celda para cambiarla. "
+                            "La fecha no se puede modificar."
+                        )
+
+                        df_editado = st.data_editor(
+                            df_original,
+                            column_config=config_columnas,
+                            hide_index=True,
+                            num_rows="fixed",
+                            use_container_width=True,
+                            key=f"editor_registros_{version_editor}",
+                        )
+
+                        guardar_cambios = st.form_submit_button(
+                            "💾 Guardar cambios",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                    if guardar_cambios:
+                        cambios = []
+                        errores_edicion = []
+
+                        for indice in range(len(df_original)):
+                            original = df_original.iloc[indice]
+                            editado = df_editado.iloc[indice]
+
+                            datos_fila = {}
+                            hubo_cambio = False
+
+                            for columna in columnas_hoja:
+                                if columna == "Fecha":
+                                    continue
+                                valor_nuevo = normalizar_valor_hoja(
+                                    editado[columna]
+                                )
+                                if valor_nuevo != normalizar_valor_hoja(
+                                    original[columna]
+                                ):
+                                    hubo_cambio = True
+                                datos_fila[columna] = valor_nuevo
+
+                            if not hubo_cambio:
+                                continue
+
+                            if (
+                                "Cantidad" in datos_fila
+                                and datos_fila["Cantidad"] in ("", "0")
+                            ):
+                                errores_edicion.append(
+                                    f"Fila {indice + 1}: la Cantidad debe ser 1 o más"
+                                )
+
+                            cambios.append(
+                                {
+                                    "fila": int(original["_fila"]),
+                                    "fecha_envio_iso": original[
+                                        "_fecha_envio_iso"
+                                    ],
+                                    "datos": datos_fila,
+                                }
+                            )
+
+                        cambios_guardados = False
+
+                        if errores_edicion:
+                            st.warning(" | ".join(errores_edicion))
+
+                        elif not cambios:
+                            st.info("No hay cambios para guardar.")
+
+                        else:
+                            try:
+                                cantidad_actualizada = (
+                                    actualizar_respuestas_apps_script(
+                                        st.session_state["form_id"],
+                                        cambios,
+                                    )
+                                )
+                                st.session_state["mensaje_edicion"] = (
+                                    f"✅ {cantidad_actualizada} registro(s) "
+                                    "actualizado(s) correctamente."
+                                )
+                                st.session_state["version_editor"] = (
+                                    version_editor + 1
+                                )
+                                cambios_guardados = True
+                            except Exception as error:
+                                st.error("No se pudieron guardar los cambios.")
+                                st.code(str(error))
+
+                        if cambios_guardados:
+                            st.rerun()
 
 elif opcion_menu == "📋 Reportes":
     st.title("📋 Reportes")
