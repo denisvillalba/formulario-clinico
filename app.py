@@ -3577,6 +3577,7 @@ if opcion_menu == "🏠 Formulario":
                         value=datetime.now(
                             ZoneInfo("America/Lima")
                         ).date(),
+                        format="DD/MM/YYYY",
                     )
 
                 with col_turno:
