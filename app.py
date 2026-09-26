@@ -3852,9 +3852,15 @@ if opcion_menu == "🏠 Formulario":
         margen_izq_ed, columna_editar, margen_der_ed = st.columns([1, 5, 1])
 
         with columna_editar:
+
             mensaje_edicion = st.session_state.pop("mensaje_edicion", None)
+            marcador_edicion = st.empty()
             if mensaje_edicion:
-                st.success(mensaje_edicion)
+                marcador_edicion.success(mensaje_edicion)
+                aviso_menu.markdown(
+                    f'<div class="aviso-menu aviso-menu-verde">{mensaje_edicion}</div>',
+                    unsafe_allow_html=True,
+                )
 
             mostrar_editor = st.toggle(
                 "✏️ Editar registros de hoy",
@@ -4048,6 +4054,14 @@ if opcion_menu == "🏠 Formulario":
 
                         if cambios_guardados:
                             st.rerun()
+
+                            
+            # Borra los avisos de edición después de unos segundos.
+            # Va al final para que la tabla ya esté visible mientras espera.
+            if mensaje_edicion:
+                time.sleep(5)
+                marcador_edicion.empty()
+                aviso_menu.empty()
 
 elif opcion_menu == "📋 Reportes":
     st.title("📋 Reportes")
