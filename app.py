@@ -4070,7 +4070,7 @@ if opcion_menu == "🏠 Formulario":
             # Borra los avisos de edición después de unos segundos.
             # Va al final para que la tabla ya esté visible mientras espera.
             if mensaje_edicion:
-                time.sleep(6)
+                time.sleep(4)
                 marcador_edicion.empty()
                 aviso_menu.empty()
 
