@@ -1841,8 +1841,6 @@ with st.sidebar:
 
     aviso_menu = st.empty()
 
-    st.caption("✅ VERSIÓN APPS SCRIPT - 08/08/2026")
-
     st.markdown(
         """
         <div class="acento-colores">
