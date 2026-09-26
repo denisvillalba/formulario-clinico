@@ -1892,7 +1892,7 @@ st.markdown(
     /* Texto de bienvenida */
     .bienvenido {
         font-family: 'Dancing Script', cursive;
-        font-size: 2.2rem;
+        font-size: 2.0rem;
         font-weight: 700;
         line-height: 1;
         text-align: center;
