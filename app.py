@@ -288,6 +288,30 @@ st.set_page_config(
 )
 
 
+st.markdown("""
+<style>
+/* Flecha para ocultar la barra lateral: siempre visible */
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarHeader"] button,
+section[data-testid="stSidebar"] button[kind="headerNoPadding"] {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Flecha para volver a mostrarla cuando está oculta */
+[data-testid="stExpandSidebarButton"],
+[data-testid="collapsedControl"],
+[data-testid="stSidebarCollapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    z-index: 999999 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # =========================================================
 # CAMPOS DEL FORMULARIO
 # =========================================================
@@ -1623,7 +1647,7 @@ def agregar_hoja_biopsias(libro, totales_biopsias):
     """
     return agregar_hoja_totales_tipo(
         libro,
-        "Biopsias",
+        "Total Biopsias",
         "Tipo de Biopsia",
         totales_biopsias,
     )
@@ -1857,8 +1881,6 @@ if FONDO_HOSPITAL_BASE64:
             min-height: 100vh !important;
         }}
 
-            
-
         </style>
         """,
         unsafe_allow_html=True,
@@ -1869,6 +1891,33 @@ st.markdown(
     <style>
     @import url("https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700&family=Press+Start+2P&display=swap");
 
+    /* Botón de la flecha: aspecto 3D */
+    [data-testid="stSidebarCollapseButton"] button,
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="collapsedControl"] button {
+        background: linear-gradient(145deg, #ffffff, #e6ecf5) !important;
+        border: 1px solid #d0d9e6 !important;
+        border-radius: 10px !important;
+        box-shadow: 0 3px 0 #b8c4d6, 0 4px 8px rgba(0,0,0,0.15) !important;
+        transition: all 0.15s ease !important;
+    }
+
+    /* Al pasar el mouse: se levanta */
+    [data-testid="stSidebarCollapseButton"] button:hover,
+    [data-testid="stExpandSidebarButton"]:hover,
+    [data-testid="collapsedControl"] button:hover {
+        background: linear-gradient(145deg, #f0f5ff, #d6e2f5) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 5px 0 #9fb0c9, 0 8px 14px rgba(0,0,0,0.2) !important;
+    }
+
+    /* Al hacer clic: se hunde */
+    [data-testid="stSidebarCollapseButton"] button:active,
+    [data-testid="stExpandSidebarButton"]:active,
+    [data-testid="collapsedControl"] button:active {
+        transform: translateY(2px) !important;
+        box-shadow: 0 1px 0 #b8c4d6, 0 2px 4px rgba(0,0,0,0.15) !important;
+    }
 
     /* =========================================================
        FONDO DEL ÁREA PRINCIPAL
@@ -2314,6 +2363,25 @@ st.markdown(
         color: #003C84;
         margin-top: 2px;
         line-height: 1;
+    }
+
+    /* Flecha << para ocultar el menú, en azul */
+    [data-testid="stSidebarCollapseButton"] button {
+        background: #FFFFFF !important;
+        border-radius: 8px !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25) !important;
+    }
+
+    [data-testid="stSidebarCollapseButton"] {
+        display: inline-flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    [data-testid="stSidebarCollapseButton"] *,
+    [data-testid="stSidebarHeader"] button * {
+        color: #003C84 !important;
+        fill: #003C84 !important;
     }
 
     [data-testid="stMain"] [data-testid="stAlert"] p {
