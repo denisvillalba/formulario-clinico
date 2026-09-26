@@ -3568,7 +3568,7 @@ if opcion_menu == "🏠 Formulario":
             with st.form("formulario_registro_biopsia", clear_on_submit=True):
 
                 col_fecha, col_turno, col_medico, col_enfermera, col_tecnica = st.columns(
-                    [0.9, 2.1, 1.0, 1.0, 1.0], gap="small"
+                    [1.2, 2.4, 1.2, 1.2, 1.2], gap="small"
                 )
 
                 with col_fecha:
