@@ -1896,7 +1896,7 @@ st.markdown(
         font-weight: 700;
         line-height: 1;
         text-align: center;
-        margin: -8px 0 -22px 0;
+        margin: -45px 0 -22px 0;
         position: relative;
         top: -25px;
         background: linear-gradient(90deg, #0d47a1, #1e88e5, #f9a825);
