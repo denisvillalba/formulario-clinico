@@ -1715,7 +1715,7 @@ def agregar_hoja_proc_adic(libro, totales_procedimientos_adicionales):
     """
     return agregar_hoja_totales_tipo(
         libro,
-        "Proc Adic",
+        "Total Proc Adic",
         "Procedimiento Adicional",
         totales_procedimientos_adicionales,
     )
