@@ -3203,6 +3203,16 @@ st.markdown(
         border: 1.5px solid #C66A00 !important;
         color: #3A1F00 !important;
     }
+
+    /* Etiqueta "Cantidad (Obligatorio) *" en amarillo */
+    .st-key-cantidad_procedimiento label,
+    .st-key-cantidad_procedimiento label p,
+    .st-key-cantidad_procedimiento label span {
+        color: #fff099 !important;
+        text-shadow:
+            0 1px 2px rgba(0, 0, 0, 0.85),
+            0 0 6px rgba(0, 0, 0, 0.45) !important;
+    }
     
     </style>
     """,
@@ -3562,7 +3572,7 @@ if opcion_menu == "🏠 Formulario":
 
                 with col_cantidad:
                     valor_cantidad = st.text_input(
-                        "Cantidad (Obligatorio) *",
+                        "Cantidad *",
                         placeholder="CANTIDAD DEL PROCEDIMIENTO",
                         help="Cantidad del procedimiento seleccionado.",
                         key="cantidad_procedimiento",
