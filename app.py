@@ -3562,7 +3562,7 @@ if opcion_menu == "🏠 Formulario":
 
     if st.session_state.get("form_id"):
 
-        margen_izq_form, columna_form, margen_der_form = st.columns([1, 5, 1])
+        margen_izq_form, columna_form, margen_der_form = st.columns([1, 6, 1])
         with columna_form:
             st.markdown("#### 2. Registrar respuesta")
             with st.form("formulario_registro_biopsia", clear_on_submit=True):
